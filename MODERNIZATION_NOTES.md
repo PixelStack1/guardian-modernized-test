@@ -14,3 +14,13 @@ Hard limit respected: pure WinDivert network filter on inbound UDP/6672. No acce
 - Tooling: black/isort/flake8 -> ruff; mypy strict (win32) passes; 41 pytest tests.
 
 ## Must be tested on a real Windows PC (see report)
+
+## Security audit fixes (2026-10-26)
+1. Driver: unload only if loaded by Guardian (DriverLifecycle), finally + atexit; README `sc stop WinDivert` note.
+2. CIDR: ipaddress.IPv4Network(strict=False), prefixlen < 8 rejected, ValueError/IndexError caught; tests 0.0.0.0/0, 1.2.3/24, 999.1.1.1/8.
+3. Streamed size caps (Azure 10 MB, RIPE 1 MB, MS page 2 MB); get_public_ip -> IPv4Address-validated or None (safe at menu import); `if not re_files`.
+4. Workflows: `permissions: contents: read`; no auto-commit/push; `ruff format --check`. No release job exists.
+5. Actions pinned by SHA; UPX dropped (`--noupx`, ghaction-upx removed); softprops release step already removed.
+6. urllib3 2.8.0, certifi 2026.10.23, idna 3.20, setuptools 84.2.1, virtualenv 21.14.13, filelock 4.2.4; pytest 9.1.1 (PYSEC-2026-1845); poetry pinned 2.5.1 in CI.
+7. Duplicate `if:` in build.yml removed.
+8. Data/logs in %LOCALAPPDATA%\Guardian; data.json/db.json/logs git-ignored (were not tracked).

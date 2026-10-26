@@ -6,6 +6,7 @@ from pathlib import Path
 import requests
 
 from util.network import construct_cidr_block_set
+from util.paths import data_file
 from util.types import CIDR_BLOCK
 
 # This file contains classes and methods to manage acquiring, parsing, and updating a possibly dynamic list of IP ranges
@@ -47,6 +48,32 @@ T2_US_FALLBACK = {
 }
 
 
+MAX_AZURE_BYTES = 10 * 1024 * 1024
+MAX_RIPE_BYTES = 1 * 1024 * 1024
+MAX_PAGE_BYTES = 2 * 1024 * 1024
+
+
+class ResponseTooLarge(Exception):
+    """Remote response exceeded the configured size cap."""
+
+
+def get_capped(url: str, max_bytes: int, **kwargs: object) -> bytes:
+    """GET with stream=True, refusing bodies larger than max_bytes."""
+    with requests.get(url, stream=True, **kwargs) as response:  # type: ignore[arg-type]
+        response.raise_for_status()
+        length = response.headers.get("Content-Length")
+        if length and length.isdigit() and int(length) > max_bytes:
+            raise ResponseTooLarge(f"{url}: {length} bytes > {max_bytes}")
+        chunks = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=65536):
+            total += len(chunk)
+            if total > max_bytes:
+                raise ResponseTooLarge(f"{url}: more than {max_bytes} bytes")
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+
 RIPESTAT_URL = "https://stat.ripe.net/data/announced-prefixes/data.json"
 AS_T2_EU = 202021
 AS_T2_US = 46555
@@ -61,16 +88,16 @@ def get_announced_prefixes(
     the static fallback.
     """
     try:
-        response = requests.get(
+        body = get_capped(
             RIPESTAT_URL,
+            MAX_RIPE_BYTES,
             params={"resource": f"AS{asn}"},
             headers={"User-Agent": "Guardian - GTA5 Firewall"},
             timeout=timeout,
         )
-        response.raise_for_status()
         prefixes = {
             entry["prefix"]
-            for entry in response.json()["data"]["prefixes"]
+            for entry in json.loads(body)["data"]["prefixes"]
             if ":" not in entry["prefix"]  # Guardian is IPv4-only
         }
         return prefixes or set(fallback)
@@ -107,9 +134,7 @@ def determine_best_azure_file(urls: list[str]) -> tuple[str, bytes]:
     best_response = b""
     best_url = ""
     for url in urls:
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        content = response.content
+        content = get_capped(url, MAX_AZURE_BYTES, timeout=30)
         change_number = json.loads(content)["changeNumber"]
         if change_number > highest_change_number:
             highest_change_number = change_number
@@ -135,30 +160,24 @@ def get_azure_ip_ranges_download(
 
     # Get the actual page.
     try:
-        response = requests.get(
+        page = get_capped(
             page_to_search,
+            MAX_PAGE_BYTES,
             headers={"User-Agent": "Guardian - GTA5 Firewall"},
             timeout=30,
         )
-        response.raise_for_status()
-        if response.status_code != 200:
-            raise ScrapeError(
-                f"URL to scrape returned {response.status_code} instead of 200.",
-                response,
-            )
 
         # Search through the HTML for all download.microsoft.com JSON files.
-        re_files = re.findall(MICROSOFT_DOWNLOAD_REGEX, str(response.content))
-        if re_files is None:
+        re_files = re.findall(MICROSOFT_DOWNLOAD_REGEX, str(page))
+        if not re_files:
             raise ScrapeError(
-                "Did not find any valid download URLs while searching the page.",
-                response,
+                "Did not find any valid download URLs while searching the page."
             )
 
         files = list(set(re_files))
         return determine_best_azure_file(files)
 
-    except (ScrapeError, requests.exceptions.RequestException) as e:
+    except (ScrapeError, ResponseTooLarge, requests.exceptions.RequestException) as e:
         # TODO: attempt to generate the URL manually.
         # TODO: Figure out what times (and timezones) Microsoft publish their IP ranges at.
         raise e
@@ -189,21 +208,21 @@ def parse_azure_ip_ranges(azure_file_contents: bytes) -> list[str]:
     return arr_ranges  # type: ignore[no-any-return]
 
 
-def get_dynamic_blacklist(backup_file: str = "db.json") -> set[CIDR_BLOCK]:
+def get_dynamic_blacklist(backup_file: str | None = None) -> set[CIDR_BLOCK]:
     # TODO: We can tell if the file has been updated by checking `changeNumber`, but that requires attempting
     # to download the file anyways. Ideally, we want to be able to skip trying to download all together because
     # the method isn't entirely reliable, and also fallback to the previously saved version if the download fails.
 
-    backup_path = Path(backup_file)
+    backup_path = Path(backup_file) if backup_file else data_file("db.json")
     try:
         download_link, content = get_azure_ip_ranges_download()
         ranges = parse_azure_ip_ranges(content)
         backup_path.write_bytes(azure_file_add_timestamp(content, download_link))
     except Exception as e:
         print("ERROR: Could not parse Azure ranges from URL. Reason: ", e)
-        if not Path(backup_file).is_file():
+        if not backup_path.is_file():
             raise FileNotFoundError(
-                f"ERROR: Could not find backup file {backup_file}."
+                f"ERROR: Could not find backup file {backup_path}."
             ) from e
         ranges = parse_azure_ip_ranges(backup_path.read_bytes())
     # R* / T2 ranges are always added, also when falling back to the Azure backup file

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal, TypedDict, TypeVar
 
+from util.paths import data_file
 from util.singleton import Singleton
 
 LIST_TYPE = Literal["blacklist", "whitelist"]
@@ -14,8 +15,10 @@ class ConfigDataType(TypedDict):
 
 
 class ConfigData(metaclass=Singleton):
-    def __init__(self, data_file: str = "data.json"):
-        self.data_file = Path(data_file)
+    def __init__(self, data_file_name: str | None = None):
+        self.data_file = (
+            Path(data_file_name) if data_file_name else data_file("data.json")
+        )
         self.data: ConfigDataType
         if self.data_file.is_file():
             self.load()

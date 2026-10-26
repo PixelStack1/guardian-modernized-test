@@ -118,3 +118,18 @@ GTA Online on PC was too crazy with modders wreaking havoc and constantly spammi
 ## Notice
 
 Modified version of Guardian by TheMythologist (https://github.com/TheMythologist/guardian), licensed under the GNU LGPL-3.0 (see LICENSE). Modifications (2026): see MODERNIZATION_NOTES.md.
+
+## WinDivert driver lifecycle
+
+Guardian loads the WinDivert driver only if it was not already registered, and unloads it
+(`pydivert.WinDivert.unregister()`) on normal exit, Ctrl+C and best-effort via `atexit`.
+A driver that was already loaded by another program is left untouched.
+After a hard kill (Task Manager, power loss) cleanup cannot run; remove the driver manually
+from an elevated prompt:
+
+```
+sc stop WinDivert
+```
+
+User data (`data.json`, `db.json`, `history.log`, `debugger.log`) is stored in
+`%LOCALAPPDATA%\Guardian` (legacy files in the working directory are copied there once).

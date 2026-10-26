@@ -7,28 +7,27 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.head_ref }}
       - name: Install poetry
-        run: pipx install poetry
+        run: pipx install poetry==2.5.1
       - name: Set up Python 3.13
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
           cache: "poetry"
       - name: Install dependencies
         run: poetry install --no-interaction --no-root
-      - name: Install UPX
-        uses: crazy-max/ghaction-upx@v4
-        with:
-          install-only: true
       - name: Lint and test
         run: |
           poetry run ruff check .
@@ -36,7 +35,7 @@ jobs:
           poetry run pytest -q
       - name: Build executable
         run: poetry run python -c "from guardian.build import build; build()"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Guardian
           path: dist/Guardian-*.exe
