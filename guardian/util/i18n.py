@@ -316,10 +316,14 @@ STRINGS: dict[str, dict[str, str]] = {
     "live.players_full": {"fr": "≥{max}", "en": "≥{max}"},
     "live.no_peers": {"fr": "(aucun pair connecté)", "en": "(no connected peer)"},
     "live.keys": {
-        "fr": "[B] Bloquer  [P] Pseudo  [D] Débloquer  [A] Bouclier auto  "
-        "[T] Blocage total  [E] Enregistrement  [PgUp/PgDn ou +/-] Page  [Q] Retour",
-        "en": "[B] Block  [P] Nickname  [D] Unblock  [A] Auto shield  "
-        "[T] Total block  [E] Recording  [PgUp/PgDn or +/-] Page  [Q] Back",
+        "fr": "[B]loquer [P]seudo [D]ébloquer [A]uto [T]otal [E]nreg. [↑↓/+-]Page [Q]uitter",
+        "en": "[B]lock [P]Nickname [D]Unblock [A]uto [T]otal [E]Record [↑↓/+-]Page [Q]uit",
+    },
+    "live.servers": {"fr": "serveurs Rockstar {n}", "en": "Rockstar servers {n}"},
+    "live.rockstar_server": {"fr": "serveur Rockstar", "en": "Rockstar server"},
+    "live.ev.rockstar_refused": {
+        "fr": "Blocage refusé : {ip} est un serveur Rockstar (vous perdriez la session)",
+        "en": "Block refused: {ip} is a Rockstar server (you would lose the session)",
     },
     "live.ev.auto_toggled": {
         "fr": "Bouclier auto : {state}",

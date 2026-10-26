@@ -203,6 +203,17 @@ class PlayerCounter:
         self.clock = clock
         self.last_seen: dict[str, float] = {}  # ordre d'insertion = ordre d'activité
         self.full = False  # saturation déjà journalisée
+        self.servers: dict[str, float] = {}  # serveurs Rockstar, jamais des joueurs
+
+    def seen_server(self, ip: str) -> None:
+        if ip in self.servers or len(self.servers) < self.max_players:
+            self.servers[ip] = self.clock()
+
+    def server_count(self) -> int:
+        limit = self.clock() - self.timeout
+        for ip in [ip for ip, ts in self.servers.items() if ts <= limit]:
+            del self.servers[ip]
+        return len(self.servers)
 
     def seen(self, ip: str) -> None:
         """O(1) : suppression/insertion dans un dict, éviction du plus ancien."""
@@ -268,11 +279,37 @@ class PlayerCounter:
         return normal + n_blocked + cut, normal, n_blocked, cut
 
 
+_ROCKSTAR_BLOCKS: set[Any] | None = None
+
+
+def is_rockstar_server(ip: str) -> bool:
+    """IP dans les plages Take-Two/Rockstar STATIQUES (AS202021, AS46555 ; voir
+    util/dynamicblacklist.py). Aucun appel réseau. Ne lève jamais."""
+    global _ROCKSTAR_BLOCKS
+    try:
+        if _ROCKSTAR_BLOCKS is None:
+            from util.dynamicblacklist import T2_EU_FALLBACK, T2_US_FALLBACK
+            from util.network import construct_cidr_block_set
+
+            _ROCKSTAR_BLOCKS = construct_cidr_block_set(
+                sorted(T2_EU_FALLBACK | T2_US_FALLBACK)
+            )
+        from util.network import ip_in_cidr_block_set
+
+        return bool(ip_in_cidr_block_set(ip, _ROCKSTAR_BLOCKS))
+    except Exception:
+        return False
+
+
 def note_player(counter: PlayerCounter, ip: str, inbound: bool) -> None:
     """Anti-usurpation : seul un paquet ENTRANT compte (IP du pair = source).
-    Une destination sortante (arbitraire) n'est jamais comptée."""
+    Une destination sortante (arbitraire) n'est jamais comptée. Les serveurs
+    Rockstar sont comptés à part, jamais comme joueurs."""
     if inbound:
-        counter.seen(ip)
+        if is_rockstar_server(ip):
+            counter.seen_server(ip)
+        else:
+            counter.seen(ip)
 
 
 def players_line(counter: PlayerCounter, ctrl: LiveSessionController) -> str:
@@ -282,7 +319,11 @@ def players_line(counter: PlayerCounter, ctrl: LiveSessionController) -> str:
         if counter.saturated()
         else str(total)
     )
-    return t("live.players", n=n, normal=normal, blocked=blocked, cut=cut)
+    line = t("live.players", n=n, normal=normal, blocked=blocked, cut=cut)
+    servers = counter.server_count()
+    if servers:
+        line += "  " + t("live.servers", n=servers)
+    return line
 
 
 def blacklist_label(pseudo: str, when: datetime) -> str:
@@ -373,6 +414,9 @@ class LiveSessionController:
         """Coupure sortante (blocage total) si autorisée ; mêmes garde-fous que l'auto."""
         if not (self.total_block and self.auto_block_available):
             return
+        if is_rockstar_server(ip):
+            self.events.append(t("live.ev.total_skipped", ip=ip))
+            return
         try:
             if self.auto_block_guard(ip):
                 self.events.append(t("live.ev.total_skipped", ip=ip))
@@ -410,7 +454,11 @@ class LiveSessionController:
 
     def block(self, ip: str, pseudo: str = "") -> None:
         """Blocage MANUEL immédiat, écrit de façon PERMANENTE dans la Blacklist
-        (data.json). Le bouclier auto, lui, bloque 7 jours via auto_block.json."""
+        (data.json). Le bouclier auto, lui, bloque 7 jours via auto_block.json.
+        Refusé pour un serveur Rockstar (on se couperait de la session)."""
+        if is_rockstar_server(ip):
+            self.events.append(t("live.ev.rockstar_refused", ip=ip))
+            return
         pseudo = pseudo or self.pseudos.get(ip, "")
         self.blocked[ip] = PERMANENT
         if self.auto_entries.pop(ip, None) is not None:  # devient permanent (data.json)
@@ -436,6 +484,7 @@ class LiveSessionController:
             not self.auto_block
             or not self.auto_block_available
             or peer.level < Level.SUSPECT
+            or is_rockstar_server(peer.ip)
         ):
             return False
         if peer.ip in self.blocked:
@@ -577,9 +626,15 @@ def render(
     alerts = []
     for i, p in enumerate(peers, 1):
         s = p.window.stats(now)
-        state = ctrl.block_status(p.ip) or (
-            t("level.learning") if p.learning(now) else t(LEVEL_KEYS[Level(p.level)])
-        )
+        server = is_rockstar_server(p.ip)
+        if server:
+            state = t("live.rockstar_server")
+        else:
+            state = ctrl.block_status(p.ip) or (
+                t("level.learning")
+                if p.learning(now)
+                else t(LEVEL_KEYS[Level(p.level)])
+            )
         try:
             first = (
                 datetime.fromtimestamp(p.first_seen, tz=UTC)
@@ -593,7 +648,7 @@ def render(
             f"{s.pps:>6.0f}  {s.bps:>8.0f}  {s.avg_size:>5.0f}  {s.max_size:>5}  "
             f"{state:<10}  {ctrl.pseudos.get(p.ip, '')}"
         )
-        color = LEVEL_COLORS[p.level]
+        color = Fore.CYAN if server else LEVEL_COLORS[p.level]
         rows.append(color + row + Style.RESET_ALL if color else row)
         if p.alert:
             alerts.append(color + p.alert + Style.RESET_ALL)
@@ -793,7 +848,9 @@ def handle_key(
     invite : l'état change, est sauvegardé et la frame suivante l'affiche."""
     if key == "b":
         peer = _pick(peers, prompt(t("live.ask_block")))
-        if peer:
+        if peer and is_rockstar_server(peer.ip):
+            ctrl.block(peer.ip)  # refusé, message dans les événements
+        elif peer:
             ctrl.block(peer.ip, prompt(t("live.ask_pseudo")))
     elif key == "p":
         peer = _pick(peers, prompt(t("live.ask_row")))

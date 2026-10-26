@@ -140,11 +140,13 @@ def test_guards_whitelist_rockstar_azure():
     rockstar = str(ipaddress.IPv4Address(next(iter(ROCKSTAR_BLOCKS))[0]))
     guard = ls.make_auto_block_guard({OTHER}, construct_cidr_block_set(["20.0.0.0/8"]))
     c, _ = ctrl_for(guard=guard)
-    for ip in (OTHER, rockstar, "20.1.2.3"):
+    for ip in (OTHER, "20.1.2.3"):
         c.block(ip)  # le manuel bloque l'entrant...
         assert ip in c.blocked
         assert ip not in c.total_blocked  # ...mais jamais la coupure sortante
     assert "protégée" in c.events[-1]
+    c.block(rockstar)  # serveur Rockstar : le manuel est refusé
+    assert rockstar not in c.blocked and rockstar not in c.total_blocked
 
 
 def test_unavailable_without_ranges():
