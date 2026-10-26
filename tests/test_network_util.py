@@ -161,3 +161,11 @@ def test_data_file_uses_localappdata(tmp_path, monkeypatch):
     p = paths.data_file("data.json")
     assert p == tmp_path / "lad" / "Guardian" / "data.json"
     assert p.read_text() == "{}"  # legacy file migrated
+
+
+def test_data_dir_falls_back_to_home(tmp_path, monkeypatch):
+    from guardian.util import paths
+
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert paths.data_dir() == tmp_path / "Guardian"
