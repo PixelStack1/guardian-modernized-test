@@ -1,4 +1,5 @@
-from typing import Any, Iterator, TypeVar, cast
+from collections.abc import Iterator
+from typing import Any, TypeVar, cast
 
 from config.configdata import LIST_TYPE, ConfigData
 from util.singleton import Singleton

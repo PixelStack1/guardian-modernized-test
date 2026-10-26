@@ -18,10 +18,10 @@ jobs:
           ref: ${{ github.head_ref }}
       - name: Install poetry
         run: pipx install poetry
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v4
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: "poetry"
       - name: Install Poetry
         run: python -m pip install --user poetry
@@ -31,13 +31,19 @@ jobs:
         uses: crazy-max/ghaction-upx@v3
         with:
           install-only: true
+      - name: Lint and test
+        run: |
+          poetry run ruff check .
+          poetry run mypy guardian
+          poetry run pytest -q
       - name: Build executable
         run: poetry run build
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: Guardian
           path: dist/Guardian-*.exe
-      - uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: dist/Guardian-*.exe
         if: startsWith(github.ref, 'refs/tags/')

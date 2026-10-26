@@ -21,7 +21,7 @@ def new_validate(ip: str) -> bool:
         if ipv4.match(ip):
             socket.inet_aton(ip)
             return True
-    except socket.error:
+    except OSError:
         pass
     return False
 

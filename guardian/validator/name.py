@@ -1,4 +1,4 @@
-from typing import Callable
+from collections.abc import Callable
 
 from prompt_toolkit.document import Document
 from questionary import ValidationError, Validator

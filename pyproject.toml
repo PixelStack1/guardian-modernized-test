@@ -1,43 +1,44 @@
 [tool.poetry]
 name = "Guardian"
-version = "3.5.0"
+version = "3.6.0.dev0"
 description = "Custom firewall used to create private lobbies for GTA5 Online"
 authors = ["TheMythologist <leekaixuan2001@gmail.com>"]
 license = "LGPL-3.0"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.10.0,<3.13"
+python = ">=3.12,<3.14"
 colorama = "^0.4.6"
-pyinstaller = "^5.13.2"
-pydivert = "2.1.0"
-questionary = "^2.1.0"
+pyinstaller = "^6.16"
+pydivert = "^4.0.1"
+questionary = "^2.1.1"
 tqdm = "^4.67.1"
-requests = "^2.32.3"
-prsw = "^0.3.1"
+requests = "^2.32.5"
 
 [tool.poetry.group.dev.dependencies]
-black = "^24.10.0"
-isort = "^5.13.2"
-flake8 = "^6.1.0"
-pyproject-flake8 = "^6.0.0.post1"
-pre-commit = "^4.1.0"
-mypy = "^1.14"
-types-colorama = "^0.4.15.20240311"
-types-tqdm = "^4.67.0.20241221"
-types-requests = "^2.32.0.20241016"
-pytest = "^8.3.4"
+ruff = "^0.14"
+pre-commit = "^4.3"
+mypy = "^1.18"
+types-colorama = "^0.4.15"
+types-tqdm = "^4.67"
+types-requests = "^2.32"
+pytest = "^8.4"
 
-[tool.poetry.scripts]
-build = "guardian.build:build"
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["guardian", "tests"]
 
-[tool.flake8]
-max-line-length = 88
-extend-ignore = ["E203", "E501"]
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501", "UP046"]  # keep Generic[T] style for mypy/py3.12 compat
 
-[tool.isort]
-profile = "black"
-src_paths = ["guardian", "tests"]
+[tool.ruff.lint.isort]
+known-first-party = ["config", "dispatcher", "menu", "network", "util", "validator"]
+
+[tool.pytest.ini_options]
+pythonpath = ["guardian", "."]
+testpaths = ["tests"]
 
 [tool.mypy]
 platform = "win32"
@@ -45,7 +46,7 @@ exclude = ["speed_tests/", "tests/", "build.py"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["pydivert", "prsw"]
+module = ["pydivert"]
 ignore_missing_imports = true
 
 [build-system]

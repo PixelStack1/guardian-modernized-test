@@ -3,7 +3,6 @@ import re
 import time
 from pathlib import Path
 
-import prsw
 import requests
 
 from util.network import construct_cidr_block_set
@@ -18,39 +17,72 @@ class ScrapeError(Exception):
     """Could not scrape the HTML for data for some reason."""
 
 
-ripe = prsw.RIPEstat()
-try:
-    T2_EU = {peer.prefix.compressed for peer in ripe.announced_prefixes(202021)}
-    T2_US = {peer.prefix.compressed for peer in ripe.announced_prefixes(46555)}
-except ConnectionError:
-    # https://whois.ipip.net/AS202021
-    T2_EU = {
-        "185.56.64.0/24",
-        "185.56.64.0/22",
-        "185.56.65.0/24",
-        "185.56.66.0/24",
-        "185.56.67.0/24",
-    }
+# https://whois.ipip.net/AS202021
+T2_EU_FALLBACK = {
+    "185.56.64.0/24",
+    "185.56.64.0/22",
+    "185.56.65.0/24",
+    "185.56.66.0/24",
+    "185.56.67.0/24",
+}
 
-    # https://whois.ipip.net/AS46555
-    T2_US = {
-        "104.255.104.0/24",
-        "104.255.104.0/22",
-        "104.255.105.0/24",
-        "104.255.106.0/24",
-        "104.255.107.0/24",
-        "192.81.240.0/24",
-        "192.81.240.0/22",
-        "192.81.241.0/24",
-        "192.81.242.0/24",
-        "192.81.243.0/24",
-        "192.81.244.0/24",
-        "192.81.244.0/22",
-        "192.81.245.0/24",
-        "192.81.246.0/24",
-        "192.81.247.0/24",
-        "198.133.210.0/24",
-    }
+# https://whois.ipip.net/AS46555
+T2_US_FALLBACK = {
+    "104.255.104.0/24",
+    "104.255.104.0/22",
+    "104.255.105.0/24",
+    "104.255.106.0/24",
+    "104.255.107.0/24",
+    "192.81.240.0/24",
+    "192.81.240.0/22",
+    "192.81.241.0/24",
+    "192.81.242.0/24",
+    "192.81.243.0/24",
+    "192.81.244.0/24",
+    "192.81.244.0/22",
+    "192.81.245.0/24",
+    "192.81.246.0/24",
+    "192.81.247.0/24",
+    "198.133.210.0/24",
+}
+
+
+RIPESTAT_URL = "https://stat.ripe.net/data/announced-prefixes/data.json"
+AS_T2_EU = 202021
+AS_T2_US = 46555
+
+
+def get_announced_prefixes(
+    asn: int, fallback: set[str], timeout: float = 10
+) -> set[str]:
+    """
+    Query RIPEstat for the prefixes announced by an AS. Replaces the `prsw` library, which broke when
+    RIPEstat added new fields to its responses (upstream issue #163). Never raises: any error returns
+    the static fallback.
+    """
+    try:
+        response = requests.get(
+            RIPESTAT_URL,
+            params={"resource": f"AS{asn}"},
+            headers={"User-Agent": "Guardian - GTA5 Firewall"},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        prefixes = {
+            entry["prefix"]
+            for entry in response.json()["data"]["prefixes"]
+            if ":" not in entry["prefix"]  # Guardian is IPv4-only
+        }
+        return prefixes or set(fallback)
+    except Exception:
+        return set(fallback)
+
+
+def get_t2_ranges() -> set[str]:
+    return get_announced_prefixes(AS_T2_EU, T2_EU_FALLBACK) | get_announced_prefixes(
+        AS_T2_US, T2_US_FALLBACK
+    )
+
 
 # This URL should return information about the most up-to-date JSON file containing Azure IP ranges.
 # Microsoft claims that a new file is published every 7 days, and that any new IPs will not be used for another 7 days.
@@ -75,7 +107,7 @@ def determine_best_azure_file(urls: list[str]) -> tuple[str, bytes]:
     best_response = b""
     best_url = ""
     for url in urls:
-        response = requests.get(url)
+        response = requests.get(url, timeout=30)
         response.raise_for_status()
         content = response.content
         change_number = json.loads(content)["changeNumber"]
@@ -104,7 +136,9 @@ def get_azure_ip_ranges_download(
     # Get the actual page.
     try:
         response = requests.get(
-            page_to_search, headers={"User-Agent": "Guardian - GTA5 Firewall"}
+            page_to_search,
+            headers={"User-Agent": "Guardian - GTA5 Firewall"},
+            timeout=30,
         )
         response.raise_for_status()
         if response.status_code != 200:
@@ -165,8 +199,6 @@ def get_dynamic_blacklist(backup_file: str = "db.json") -> set[CIDR_BLOCK]:
         download_link, content = get_azure_ip_ranges_download()
         ranges = parse_azure_ip_ranges(content)
         backup_path.write_bytes(azure_file_add_timestamp(content, download_link))
-        ranges.extend(T2_EU)  # add R* EU ranges
-        ranges.extend(T2_US)  # add R* US ranges
     except Exception as e:
         print("ERROR: Could not parse Azure ranges from URL. Reason: ", e)
         if not Path(backup_file).is_file():
@@ -174,4 +206,7 @@ def get_dynamic_blacklist(backup_file: str = "db.json") -> set[CIDR_BLOCK]:
                 f"ERROR: Could not find backup file {backup_file}."
             ) from e
         ranges = parse_azure_ip_ranges(backup_path.read_bytes())
+    # R* / T2 ranges are always added, also when falling back to the Azure backup file
+    # (upstream only added them on the success path).
+    ranges.extend(get_t2_ranges())
     return construct_cidr_block_set(ranges)

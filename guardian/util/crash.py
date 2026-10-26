@@ -1,13 +1,12 @@
 import time
 import traceback
 from pathlib import Path
-from typing import Optional
 
 
 def crash_report(
     exception: Exception,
-    additional: Optional[str] = None,
-    filename: Optional[str] = None,
+    additional: str | None = None,
+    filename: str | None = None,
 ) -> None:
     if filename is None:
         filename = f"crashreport_{hex(int(time.time_ns()))[2:]}.log"

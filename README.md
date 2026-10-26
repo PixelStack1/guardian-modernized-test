@@ -11,7 +11,7 @@ Custom firewall for the game GTA Online (version 1.66 and onwards).
 
 ### Requirements
 
-- Windows 8/10/11 or Windows Server 2012 64-bit
+- Windows 10/11 64-bit (WinDivert 2.2 via pydivert 4.x)
 - Administrator Privileges
 
 ## How to use
