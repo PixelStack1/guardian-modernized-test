@@ -61,6 +61,11 @@ SUSPECT_PERSIST_SECONDS = 5.0
 # Retour à la normale après ce nombre de secondes sans anomalie.
 CALM_SECONDS = 10.0
 
+# Nombre maximal de pairs suivis : borne le coût CPU/mémoire si un flot d'IP
+# sources usurpées arrive. Au-delà, le pair le plus ancien (inactif) est oublié,
+# et si tous sont actifs, les nouvelles IP sont ignorées par la vue.
+MAX_PEERS = 512
+
 # Un pair est « connecté » s'il a envoyé un paquet dans ce délai (cf. ConnectionStats).
 CONNECTED_SECONDS = 5.0
 
@@ -154,6 +159,8 @@ class SessionMonitor:
         size = max(0, int(size))
         peer = self.peers.get(ip)
         if peer is None:
+            if len(self.peers) >= MAX_PEERS and not self._make_room(ts):
+                return
             peer = PeerState(ip=ip, first_seen=ts, last_seen=ts)
             self.peers[ip] = peer
         peer.last_seen = max(peer.last_seen, ts)
@@ -171,6 +178,14 @@ class SessionMonitor:
                 peer.tiny_run_size, peer.tiny_run_length = size, 1
         else:
             peer.tiny_run_size, peer.tiny_run_length = -1, 0
+
+    def _make_room(self, now: float) -> bool:
+        """Libère une place en oubliant le pair vu le moins récemment s'il est inactif."""
+        oldest = min(self.peers.values(), key=lambda p: p.last_seen)
+        if now - oldest.last_seen <= CONNECTED_SECONDS:
+            return False
+        del self.peers[oldest.ip]
+        return True
 
     @staticmethod
     def _finish_learning(peer: PeerState) -> None:
@@ -201,8 +216,8 @@ class SessionMonitor:
             return 0.0
         if peer.baseline_pps is None:
             self._finish_learning(peer)
-        assert peer.baseline_pps is not None
-        ref = max(peer.baseline_pps, BASELINE_MIN_PPS)
+        baseline = peer.baseline_pps if peer.baseline_pps is not None else 0.0
+        ref = max(baseline, BASELINE_MIN_PPS)
         ratio = stats.pps / ref
         if stats.pps >= BURST_MIN_PPS and ratio >= BURST_RATIO:
             return ratio
@@ -213,30 +228,41 @@ class SessionMonitor:
         peers = self.connected(now)
         stats = {p.ip: p.window.stats(now) for p in peers}
         bursts = {p.ip: self._is_bursting(p, stats[p.ip], now) for p in peers}
+        # Calculés une seule fois par évaluation (coût O(n) au lieu de O(n²)).
+        total_bursting = sum(1 for r in bursts.values() if r)
+        # Deux plus grandes tailles vues : le max « des autres » d'un pair est la
+        # 2e si ce pair détient la 1re, sinon la 1re.
+        top: list[tuple[int, str]] = sorted(
+            ((p.max_size_ever, p.ip) for p in peers), reverse=True
+        )[:2]
+        n_others = len(peers) - 1
         for peer in peers:
             s = stats[peer.ip]
-            others = [o for o in peers if o.ip != peer.ip]
             reasons: list[str] = []
             keys: list[str] = []
             severe = False
 
             ratio = bursts[peer.ip]
             if ratio:
-                bursting_others = sum(1 for o in others if bursts[o.ip])
+                bursting_others = total_bursting - 1
                 session_wide = (
                     bursting_others >= 2
-                    and bursting_others >= SESSION_WIDE_FRACTION * len(others)
+                    and bursting_others >= SESSION_WIDE_FRACTION * n_others
                 )
                 if not session_wide:
-                    assert peer.baseline_pps is not None
                     reasons.append(
-                        t("anomaly.burst", pps=s.pps, base=peer.baseline_pps)
-                        + (t("anomaly.targeted") if others else "")
+                        t("anomaly.burst", pps=s.pps, base=peer.baseline_pps or 0.0)
+                        + (t("anomaly.targeted") if n_others > 0 else "")
                     )
                     keys.append("reason.burst")
                     severe = ratio >= BURST_RATIO_SEVERE
 
-            others_max = max((o.max_size_ever for o in others), default=0)
+            if not top:
+                others_max = 0
+            elif top[0][1] != peer.ip:
+                others_max = top[0][0]
+            else:
+                others_max = top[1][0] if len(top) > 1 else 0
             if (
                 others_max
                 and s.max_size > HUGE_MIN_BYTES

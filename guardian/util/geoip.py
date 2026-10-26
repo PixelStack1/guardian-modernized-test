@@ -11,6 +11,7 @@ import gzip
 import ipaddress
 import struct
 import sys
+import zlib
 from functools import lru_cache
 from pathlib import Path
 
@@ -28,15 +29,18 @@ def db_path() -> Path:
 
 @lru_cache(maxsize=1)
 def _load() -> tuple[list[int], list[str]]:
+    # Fichier absent ou corrompu : pays « — » partout, jamais de plantage.
     try:
         raw = gzip.decompress(db_path().read_bytes())
-    except OSError:
+        starts: list[int] = []
+        codes: list[str] = []
+        for start, cc in struct.iter_unpack(">I2s", raw):
+            starts.append(start)
+            codes.append(cc.decode("ascii"))
+    except (OSError, EOFError, struct.error, UnicodeDecodeError, zlib.error):
         return [], []
-    starts: list[int] = []
-    codes: list[str] = []
-    for start, cc in struct.iter_unpack(">I2s", raw):
-        starts.append(start)
-        codes.append(cc.decode("ascii"))
+    if starts != sorted(starts):
+        return [], []
     return starts, codes
 
 

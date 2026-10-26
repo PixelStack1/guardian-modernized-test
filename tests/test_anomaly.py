@@ -207,3 +207,60 @@ def test_recorder_metadata_only(tmp_path):
         ["2.500000", "1.1.1.1", "100", "entrant"],
         ["3.000000", "2.2.2.2", "50", "sortant"],
     ]
+
+
+# -- coût CPU borné ------------------------------------------------------------
+
+
+def test_peer_cap_spoofed_flood():
+    mon = SessionMonitor()
+    for i in range(an.MAX_PEERS * 3):
+        mon.add_packet(f"10.{i // 65536}.{i // 256 % 256}.{i % 256}", 50, 1.0)
+    assert len(mon.peers) == an.MAX_PEERS
+    mon.evaluate(1.0)
+    # Une fois les anciens pairs inactifs, de nouveaux peuvent prendre leur place.
+    mon.add_packet("99.99.99.99", 50, 1.0 + an.CONNECTED_SECONDS + 1)
+    assert "99.99.99.99" in mon.peers
+    assert len(mon.peers) == an.MAX_PEERS
+
+
+def test_huge_uses_others_max_not_own():
+    # Le plus gros émetteur est comparé au 2e max, les autres au 1er.
+    mon = SessionMonitor()
+    t = learned(mon, ["1.1.1.1", "2.2.2.2", "3.3.3.3"])
+    feed(mon, "2.2.2.2", 30, t, t + 4, size=400)
+    feed(mon, "3.3.3.3", 30, t, t + 4, size=300)
+    feed(mon, "1.1.1.1", 30, t, t + 4, size=1400)
+    mon.evaluate(t + 4)
+    assert "énormes (1400 o, max des autres 400 o)" in mon.peers["1.1.1.1"].alert
+    assert mon.peers["2.2.2.2"].level == Level.NORMAL
+
+
+# -- enregistrement : rotation / limite -------------------------------------------
+
+
+def test_recorder_rotates_and_stops(tmp_path):
+    from guardian.network.recorder import MetadataRecorder
+
+    rec = MetadataRecorder(tmp_path)
+    rec.max_lines, rec.max_files = 10, 3
+    rec.start()
+    for i in range(100):
+        rec.write(float(i), "1.1.1.1", 10, True)
+    assert rec.stopped_by_limit and not rec.active
+    files = sorted(tmp_path.glob("*.csv"))
+    assert len(files) == 3
+    for f in files:
+        assert len(f.read_text(encoding="utf-8").splitlines()) == 11  # en-tête + 10
+
+
+def test_recorder_byte_limit(tmp_path):
+    from guardian.network.recorder import MetadataRecorder
+
+    rec = MetadataRecorder(tmp_path)
+    rec.max_bytes, rec.max_files = 1000, 1
+    rec.start()
+    for i in range(1000):
+        rec.write(float(i), "1.1.1.1", 10, True)
+    assert rec.stopped_by_limit
+    assert next(tmp_path.glob("*.csv")).stat().st_size < 2000

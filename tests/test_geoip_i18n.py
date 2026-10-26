@@ -52,3 +52,36 @@ def test_set_language_persists():
         assert ConfigData().data["language"] == "en"
     finally:
         i18n.set_language("fr")
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"",
+        b"not gzip at all",
+        None,  # gzip tronqué
+        "bad_record",  # gzip valide, enregistrement incomplet
+        "bad_ascii",  # code pays non ASCII
+    ],
+)
+def test_corrupt_db_degrades(tmp_path, monkeypatch, content):
+    import gzip
+    import struct
+
+    good = gzip.compress(struct.pack(">I2s", 0, b"FR") * 4)
+    if content is None:
+        content = good[: len(good) // 2]
+    elif content == "bad_record":
+        content = gzip.compress(b"\x00\x00\x00\x00FR\x01")
+    elif content == "bad_ascii":
+        content = gzip.compress(struct.pack(">I2s", 0, b"\xff\xfe"))
+    path = tmp_path / "geo.bin.gz"
+    path.write_bytes(content)
+    monkeypatch.setattr(geoip, "db_path", lambda: path)
+    geoip._load.cache_clear()
+    geoip.country_code.cache_clear()
+    try:
+        assert geoip.country_label("8.8.8.8") == "—"
+    finally:
+        geoip._load.cache_clear()
+        geoip.country_code.cache_clear()

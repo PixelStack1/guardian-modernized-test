@@ -39,7 +39,8 @@ AUTO_BLOCK_SECONDS = 10 * 60
 # Clé de data.json du bouclier auto (IP rouges uniquement). ACTIVÉ si absente.
 # Les IP orange ne sont jamais bloquées automatiquement (bouclier manuel).
 AUTO_BLOCK_KEY = "auto_block_suspect"
-AUTO_BLOCK_DEFAULT = True
+# DÉSACTIVÉ par défaut pendant la phase de test (activable avec la touche A).
+AUTO_BLOCK_DEFAULT = False
 # Fréquence d'évaluation des anomalies / du bouclier auto (secondes).
 EVAL_SECONDS = 0.1
 # Rafraîchissement de la liste de blocage dans le processus de capture (secondes).
@@ -98,6 +99,25 @@ def blacklist_label(pseudo: str, when: datetime) -> str:
     return t("live.label_nopseudo", date=stamp)
 
 
+def make_auto_block_guard(
+    whitelist_ips: set[str], dynamic_blocks: set[Any]
+) -> Callable[[str], bool]:
+    """IP que le bouclier AUTO ne doit jamais bloquer : liste blanche, plages
+    Rockstar/Take-Two (sessions.py) et plages R*/Azure dynamiques (dynamicblacklist)."""
+    from network.sessions import is_rockstar_ip
+    from util.network import ip_in_cidr_block_set
+
+    def guard(ip: str) -> bool:
+        if ip in whitelist_ips:
+            return True
+        try:
+            return is_rockstar_ip(ip) or ip_in_cidr_block_set(ip, dynamic_blocks)
+        except Exception:
+            return True  # dans le doute, ne pas bloquer automatiquement
+
+    return guard
+
+
 class LiveSessionController:
     """Logique de blocage/déblocage (testable sans console ni WinDivert)."""
 
@@ -107,8 +127,13 @@ class LiveSessionController:
         blacklist: Any,
         auto_block: bool = AUTO_BLOCK_DEFAULT,
         clock: Callable[[], float] = time.time,
+        auto_block_guard: Callable[[str], bool] | None = None,
     ) -> None:
         self.blocked = blocked
+        # Concerne UNIQUEMENT le blocage automatique ; le blocage manuel (B) peut
+        # bloquer n'importe quelle IP choisie par l'utilisateur.
+        self.auto_block_guard = auto_block_guard or (lambda _ip: False)
+        self._guard_reported: set[str] = set()
         self.blacklist = blacklist
         self.auto_block = auto_block
         self.clock = clock
@@ -119,7 +144,8 @@ class LiveSessionController:
             self.blocked[ip] = PERMANENT
 
     def block(self, ip: str, pseudo: str = "") -> None:
-        """Blocage immédiat + persistance dans la Blacklist existante."""
+        """Blocage MANUEL immédiat, écrit de façon PERMANENTE dans la Blacklist
+        (data.json). À l'inverse, le bouclier auto ne bloque qu'en mémoire, 10 min."""
         pseudo = pseudo or self.pseudos.get(ip, "")
         self.blocked[ip] = PERMANENT
         self.blacklist.add(ip, blacklist_label(pseudo, datetime.now()))
@@ -131,6 +157,12 @@ class LiveSessionController:
             return False
         if peer.ip in self.blocked:
             return False
+        if self.auto_block_guard(peer.ip):
+            if peer.ip not in self._guard_reported:
+                self._guard_reported.add(peer.ip)
+                self.events.append(t("live.ev.auto_skipped", ip=peer.ip))
+            return False
+        # Blocage en mémoire uniquement (jamais écrit dans data.json), expire seul.
         self.blocked[peer.ip] = self.clock() + AUTO_BLOCK_SECONDS
         self.events.append(
             t(
@@ -185,6 +217,7 @@ def render(
             "live.status",
             minutes=AUTO_BLOCK_SECONDS // 60,
             auto=t("live.on") if ctrl.auto_block else t("live.off"),
+            hint="" if ctrl.auto_block else t("live.auto_hint"),
             rec=recording,
         ),
         "",
@@ -245,10 +278,16 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
     manager = Manager()
     blocked: MutableMapping[str, float] = manager.dict()
     packets: Queue[Packet] = Queue(QUEUE_MAX)
+    from config.globallist import Whitelist
+    from menu.menu import Menu  # import tardif : menu.py importe ce module
+
     ctrl = LiveSessionController(
         blocked,
         Blacklist(),
         auto_block=bool(config.data.get(AUTO_BLOCK_KEY, AUTO_BLOCK_DEFAULT)),
+        auto_block_guard=make_auto_block_guard(
+            set(Whitelist().ips), Menu.dynamic_blacklist
+        ),
     )
     monitor = SessionMonitor()
     recorder = MetadataRecorder()

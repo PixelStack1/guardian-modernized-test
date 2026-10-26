@@ -181,14 +181,20 @@ User data (`data.json`, `db.json`, `history.log`, `debugger.log`) is stored in
 - La « normale » de chaque pair est apprise pendant ses 60 premières secondes. Ligne orange
   (« inhabituel ») puis rouge (« suspect ») en cas de rafale ciblée, de paquets énormes ou de longues
   séries de petits paquets identiques. Seuils : en tête de `guardian/network/anomaly.py`.
-- **Bouclier auto** (IP rouges uniquement) : **activé par défaut**, bloque l'IP pendant 10 min et
-  affiche `Bouclier auto : <ip> bloqué (rafale)`. Désactivable avec la touche `A` ou
-  `"auto_block_suspect": false` dans `%LOCALAPPDATA%\Guardian\data.json`.
-  Les IP orange ne sont **jamais** bloquées automatiquement : c'est le bouclier manuel (`B`).
+- **Bouclier auto** (IP rouges uniquement) : **désactivé par défaut** pendant la phase de test.
+  À activer avec la touche `A` (ou `"auto_block_suspect": true` dans
+  `%LOCALAPPDATA%\Guardian\data.json`) une fois les seuils validés. Il bloque l'IP **en mémoire
+  pendant 10 min** (rien n'est écrit dans `data.json`) et affiche `Bouclier auto : <ip> bloqué (rafale)`.
+  Il ne bloque **jamais** une IP de la liste blanche ni une plage Rockstar/Take-Two/Azure connue.
+  Les IP orange ne sont jamais bloquées automatiquement.
+- **Bouclier manuel** (`B`) : bloque n'importe quelle IP choisie et l'écrit **de façon permanente**
+  dans la liste noire de `data.json` (avec date et pseudo) ; `D` pour débloquer (retire aussi
+  l'IP de la liste noire).
 - Touches : `B` bloquer (immédiat + ajout à la liste noire avec date et pseudo), `P` pseudo,
   `D` débloquer, `A` bouclier auto, `E` enregistrement, `Q` retour.
 - Enregistrement : uniquement des métadonnées (horodatage, IP, taille, sens), jamais le contenu,
-  dans `%LOCALAPPDATA%\Guardian\enregistrements\`.
+  dans `%LOCALAPPDATA%\Guardian\enregistrements\`. Nouveau fichier tous les 1 000 000 lignes /
+  100 Mo, arrêt automatique après 5 fichiers.
 
 ## Langue / Language
 

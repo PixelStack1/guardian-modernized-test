@@ -13,7 +13,7 @@ class ConfigDataType(TypedDict):
     blacklist: dict[str, str]
     whitelist: dict[str, str]
     extra_ports: NotRequired[bool]
-    # Vue Session en direct : bouclier auto 10 min des IP rouges (ACTIVÉ si absent).
+    # Vue Session en direct : bouclier auto 10 min des IP rouges (DÉSACTIVÉ si absent, phase de test).
     auto_block_suspect: NotRequired[bool]
     # Langue de l'interface : « fr » (par défaut) ou « en ».
     language: NotRequired[str]

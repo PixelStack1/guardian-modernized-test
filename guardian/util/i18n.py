@@ -260,8 +260,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Guardian — Live session (test build)",
     },
     "live.status": {
-        "fr": "Bouclier auto (rouge, {minutes} min) : {auto}   Enregistrement : {rec}",
-        "en": "Auto shield (red, {minutes} min): {auto}   Recording: {rec}",
+        "fr": "Bouclier auto (rouge, {minutes} min) : {auto}{hint}   Enregistrement : {rec}",
+        "en": "Auto shield (red, {minutes} min): {auto}{hint}   Recording: {rec}",
+    },
+    "live.auto_hint": {
+        "fr": " (par défaut en test ; [A] pour activer)",
+        "en": " (default while testing; [A] to enable)",
     },
     "live.on": {"fr": "ACTIVÉ", "en": "ON"},
     "live.off": {"fr": "désactivé", "en": "off"},
@@ -309,6 +313,10 @@ STRINGS: dict[str, dict[str, str]] = {
     "live.ev.auto": {
         "fr": "Bouclier auto : {ip} bloqué ({reason}) pour {minutes} min",
         "en": "Auto shield: {ip} blocked ({reason}) for {minutes} min",
+    },
+    "live.ev.auto_skipped": {
+        "fr": "Bouclier auto : {ip} non bloqué (liste blanche ou plage Rockstar/Azure)",
+        "en": "Auto shield: {ip} not blocked (whitelist or Rockstar/Azure range)",
     },
     "live.ev.unblocked": {"fr": "IP {ip} débloquée", "en": "IP {ip} unblocked"},
     "live.ev.expired": {
