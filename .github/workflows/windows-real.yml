@@ -43,7 +43,9 @@ jobs:
           Start-Sleep -Seconds 3
           sc.exe query WinDivert 2>&1 | Tee-Object -Append logs/sc_after_exit.txt
           "exit-check-done" | Tee-Object -Append logs/sc_after_exit.txt
+          exit 0  # sc.exe returns 1060 when the service is absent (expected); results are in the log
       - name: Install UPX
+        if: always()
         uses: crazy-max/ghaction-upx@v3
         with:
           install-only: true
@@ -53,9 +55,10 @@ jobs:
       - name: Smoke-launch exe (20 s, stdin closed)
         if: always()
         run: |
+          New-Item -ItemType File -Force logs/empty_stdin.txt | Out-Null
           $exe = Get-ChildItem dist/Guardian-*.exe | Select-Object -First 1
           "exe: $($exe.FullName) size: $($exe.Length)" | Tee-Object logs/exe_launch.txt
-          $p = Start-Process -FilePath $exe.FullName -PassThru -RedirectStandardOutput logs/exe_stdout.txt -RedirectStandardError logs/exe_stderr.txt -RedirectStandardInput NUL
+          $p = Start-Process -FilePath $exe.FullName -PassThru -RedirectStandardOutput logs/exe_stdout.txt -RedirectStandardError logs/exe_stderr.txt -RedirectStandardInput logs/empty_stdin.txt
           Start-Sleep -Seconds 20
           if (-not $p.HasExited) { "still running after 20s (PID $($p.Id)) -> stopping own PID" | Tee-Object -Append logs/exe_launch.txt; Stop-Process -Id $p.Id -Force } else { "exited with code $($p.ExitCode)" | Tee-Object -Append logs/exe_launch.txt }
           Start-Sleep -Seconds 2
