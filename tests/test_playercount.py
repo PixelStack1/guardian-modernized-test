@@ -136,13 +136,179 @@ def test_render_shows_players_line():
     assert "Joueurs" not in ls.render(SessionMonitor(), k, [], "off", 0.0)
 
 
-def test_capture_loop_untouched_and_metadata_only():
+def _func(name):
+    import ast
     import inspect
 
-    src = inspect.getsource(ls.capture_loop)
-    assert "PlayerCounter" not in src and "player" not in src
-    pc = inspect.getsource(ls.PlayerCounter)
-    assert "payload" not in pc and ".send(" not in pc
-    run = inspect.getsource(ls.run_live_session)
-    assert "player_counter.seen(ip)" in run
-    assert "render(monitor, ctrl, peers, rec, now, player_counter)" in run
+    tree = ast.parse(inspect.getsource(ls))
+    return next(
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name
+    )
+
+
+def _names(node):
+    import ast
+
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)} | {
+        n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)
+    }
+
+
+def test_capture_loop_untouched_and_metadata_only():
+    import ast
+
+    names = _names(_func("capture_loop"))
+    assert not {"PlayerCounter", "note_player", "player_counter", "seen"} & names
+    pc_names = _names(
+        next(
+            n
+            for n in ast.walk(ast.parse(__import__("inspect").getsource(ls)))
+            if isinstance(n, ast.ClassDef) and n.name == "PlayerCounter"
+        )
+    )
+    assert not {"payload", "send", "WinDivert"} & pc_names
+
+
+def test_display_loop_feeds_counter_with_direction_and_renders_it():
+    import ast
+
+    run = _func("run_live_session")
+    feeds = [
+        c
+        for c in ast.walk(run)
+        if isinstance(c, ast.Call)
+        and isinstance(c.func, ast.Name)
+        and c.func.id == "note_player"
+    ]
+    assert len(feeds) == 1
+    assert [a.id for a in feeds[0].args] == ["player_counter", "ip", "inbound"]
+    assert "seen" not in _names(run)  # jamais d'appel direct sans direction
+    renders = [
+        c
+        for c in ast.walk(run)
+        if isinstance(c, ast.Call)
+        and isinstance(c.func, ast.Name)
+        and c.func.id == "render"
+    ]
+    assert renders and all(
+        any(isinstance(a, ast.Name) and a.id == "player_counter" for a in c.args)
+        for c in renders
+    )
+
+
+def test_spoofed_outbound_ips_not_counted():
+    c = ls.PlayerCounter(clock=Mono())
+    for i in range(50):
+        ls.note_player(c, f"198.51.100.{i}", inbound=False)  # destinations arbitraires
+    assert c.players() == []
+    ls.note_player(c, A, inbound=True)
+    ls.note_player(c, B, inbound=False)
+    assert c.players() == [A]
+
+
+def test_saturated_display_fr_en():
+    c = ls.PlayerCounter(clock=Mono())
+    for i in range(ls.MAX_PLAYERS + 5):
+        c.seen(f"10.{i // 65536}.{i // 256 % 256}.{i % 256}")
+    k = ctrl()
+    import sys
+
+    rt = sys.modules[ls.t.__module__]  # module i18n réellement utilisé par ls
+    rt.set_language("fr", persist=False)
+    try:
+        assert ls.players_line(c, k).startswith("Joueurs : ≥1024 (normaux 1024")
+        rt.set_language("en", persist=False)
+        assert ls.players_line(c, k).startswith("Players: ≥1024 (normal 1024")
+    finally:
+        rt.set_language("fr", persist=False)
+    small = ls.PlayerCounter(clock=Mono())
+    small.seen(A)
+    assert ls.players_line(small, k).startswith("Joueurs : 1 (")
+
+
+class CountingProxy:
+    """Simule un DictProxy (Manager) en comptant les allers-retours."""
+
+    def __init__(self, data):
+        self.data = data
+        self.calls = 0
+
+    def keys(self):
+        self.calls += 1
+        return list(self.data)
+
+    def __getitem__(self, k):
+        return self.data[k]
+
+    def get(self, *a):
+        self.calls += 1
+        return self.data.get(*a)
+
+    def __contains__(self, k):
+        self.calls += 1
+        return k in self.data
+
+    def __iter__(self):
+        self.calls += 1
+        return iter(self.data)
+
+
+def test_single_manager_access_per_render():
+    k = ctrl(total=True)
+    k.blocked = CountingProxy({A: ls.PERMANENT})
+    k.total_blocked = CountingProxy({B: 1600.0})
+    c = ls.PlayerCounter(clock=Mono())
+    for ip in (A, B, C, D, "203.0.113.9", "203.0.113.10"):
+        c.seen(ip)
+    out = ls.render(SessionMonitor(), k, [], "off", 0.0, c)
+    assert "Joueurs : 6 (normaux 4, bloqués 1, coupés 1)" in out
+    assert k.blocked.calls == 1 and k.total_blocked.calls == 1
+
+
+def test_broken_proxy_is_safe():
+    class Broken:
+        def keys(self):
+            raise EOFError
+
+    k = ctrl(total=True)
+    k.blocked = Broken()
+    k.total_blocked = Broken()
+    c = ls.PlayerCounter(clock=Mono())
+    c.seen(A)
+    assert c.counts(k) == (1, 1, 0, 0)
+
+
+def test_saturation_logged_once_and_rearmed(caplog):
+    clock = Mono()
+    c = ls.PlayerCounter(max_players=3, timeout=60, clock=clock)
+    with caplog.at_level(logging.DEBUG, logger=ls.logger.name):
+        for i in range(20):
+            c.seen(f"198.51.100.{i}")
+    recs = [r for r in caplog.records if "satur" in r.getMessage()]
+    assert len(recs) == 1 and recs[0].levelno == logging.DEBUG
+    assert "198.51.100" not in caplog.text
+    clock.now += 61
+    c.purge()  # repasse sous la borne : drapeau réarmé
+    assert not c.full
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=ls.logger.name):
+        for i in range(5):
+            c.seen(f"192.0.2.{i}")
+    assert len([r for r in caplog.records if "satur" in r.getMessage()]) == 1
+
+
+def test_seen_is_constant_time_operations():
+    """seen() ne parcourt jamais le dict (O(1)) : pas d'itération complète."""
+
+    class Tracking(dict):
+        iters = 0
+
+        def __iter__(self):
+            Tracking.iters += 1
+            return super().__iter__()
+
+    c = ls.PlayerCounter(max_players=4, clock=Mono())
+    c.last_seen = Tracking()
+    for i in range(100):
+        c.seen(f"198.51.100.{i}")
+    assert Tracking.iters <= 100  # au plus un next(iter()) par éviction

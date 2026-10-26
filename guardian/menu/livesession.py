@@ -188,7 +188,8 @@ class PlayerCounter:
     """Dernier passage (monotone) par IP de pair, O(1) par paquet, borné et purgé.
 
     Alimenté côté affichage (jamais dans capture_loop) avec les seules métadonnées
-    déjà transmises (IP, horodatage) : aucun verrou, aucune lecture de charge utile."""
+    déjà transmises, et UNIQUEMENT pour les paquets entrants (IP du pair = source) :
+    une destination usurpée/arbitraire n'est jamais comptée. Aucun verrou."""
 
     def __init__(
         self,
@@ -200,16 +201,19 @@ class PlayerCounter:
         self.max_players = max_players
         self.clock = clock
         self.last_seen: dict[str, float] = {}  # ordre d'insertion = ordre d'activité
+        self.full = False  # saturation déjà journalisée
 
     def seen(self, ip: str) -> None:
-        now = self.clock()
+        """O(1) : suppression/insertion dans un dict, éviction du plus ancien."""
         last = self.last_seen
         if ip in last:
             del last[ip]  # remis en fin : le plus ancien reste en tête
         elif len(last) >= self.max_players:
             del last[next(iter(last))]
-            logger.debug("Compteur de joueurs plein : le plus ancien est oublié")
-        last[ip] = now
+            if not self.full:
+                self.full = True
+                logger.debug("Compteur de joueurs saturé (%d)", self.max_players)
+        last[ip] = self.clock()
 
     def purge(self) -> None:
         limit = self.clock() - self.timeout
@@ -219,6 +223,11 @@ class PlayerCounter:
             if last[ip] > limit:
                 break
             del last[ip]
+        if len(last) < self.max_players:
+            self.full = False
+
+    def saturated(self) -> bool:
+        return len(self.last_seen) >= self.max_players
 
     def players(self) -> list[str]:
         self.purge()
@@ -228,22 +237,46 @@ class PlayerCounter:
         self, ctrl: LiveSessionController, now: float | None = None
     ) -> tuple[int, int, int, int]:
         """(total, normaux, bloqués, coupés). Bloqué : Blacklist ou blocage auto.
-        Coupé : sortant actuellement coupé par le blocage total."""
+        Coupé : sortant actuellement coupé par le blocage total. Une seule copie de
+        chaque dict partagé (Manager) par appel, jamais un accès par IP."""
         now = ctrl.clock() if now is None else now
-        normal = blocked = cut = 0
+        try:
+            blocked = dict(ctrl.blocked)
+        except Exception:
+            blocked = {}
+        total_on = bool(ctrl.total_block)
+        cuts: dict[str, float] = {}
+        if total_on:
+            try:
+                cuts = dict(ctrl.total_blocked)
+            except Exception:
+                cuts = {}
+        normal = n_blocked = cut = 0
         for ip in self.players():
-            if is_blocked(ctrl.blocked, ip, now):
-                blocked += 1
-            elif ctrl.total_block and now < ctrl.total_blocked.get(ip, 0.0):
+            if is_blocked(blocked, ip, now):
+                n_blocked += 1
+            elif now < cuts.get(ip, 0.0):
                 cut += 1
             else:
                 normal += 1
-        return normal + blocked + cut, normal, blocked, cut
+        return normal + n_blocked + cut, normal, n_blocked, cut
+
+
+def note_player(counter: PlayerCounter, ip: str, inbound: bool) -> None:
+    """Anti-usurpation : seul un paquet ENTRANT compte (IP du pair = source).
+    Une destination sortante (arbitraire) n'est jamais comptée."""
+    if inbound:
+        counter.seen(ip)
 
 
 def players_line(counter: PlayerCounter, ctrl: LiveSessionController) -> str:
     total, normal, blocked, cut = counter.counts(ctrl)
-    return t("live.players", n=total, normal=normal, blocked=blocked, cut=cut)
+    n = (
+        t("live.players_full", max=counter.max_players)
+        if counter.saturated()
+        else str(total)
+    )
+    return t("live.players", n=n, normal=normal, blocked=blocked, cut=cut)
 
 
 def blacklist_label(pseudo: str, when: datetime) -> str:
@@ -622,7 +655,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
                 try:
                     ts, ip, size, inbound, port = packets.get(timeout=0.02)
                     recorder.write(ts, ip, size, inbound)
-                    player_counter.seen(ip)
+                    note_player(player_counter, ip, inbound)
                     if inbound:
                         monitor.add_packet(ip, size, ts, port)
                 except queue.Empty:
