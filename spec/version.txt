@@ -27,11 +27,11 @@ VSVersionInfo(
         '04090000',
         [StringStruct('CompanyName', ''),
         StringStruct('FileDescription', 'Custom firewall for GTA Online'),
-        StringStruct('FileVersion', '3.6.0.dev0'),
+        StringStruct('FileVersion', '3.6.0'),
         StringStruct('InternalName', 'Guardian.exe'),
         StringStruct('OriginalFilename', 'Guardian.exe'),
         StringStruct('ProductName', 'Guardian'),
-        StringStruct('ProductVersion', '3.6.0.dev0')])
+        StringStruct('ProductVersion', '3.6.0')])
       ]),
     VarFileInfo([VarStruct('Translation', [1033, 0])])
   ]
