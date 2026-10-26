@@ -25,6 +25,7 @@ from network.sessions import (
 )
 from util.constants import DISCORD_URL, UI_STYLE
 from util.dynamicblacklist import get_dynamic_blacklist
+from util.i18n import LANGUAGES, set_language, t
 from util.network import get_private_ip, get_public_ip, ip_in_cidr_block_set
 from util.printer import pretty_print, print_invalid_ip
 from validator.ip import IPValidator
@@ -48,7 +49,7 @@ class Menu:
         while True:
             try:
                 answer = questionary.select(
-                    "What do you want?", Prompts.MAIN_MENU, style=UI_STYLE
+                    t("menu.question"), Prompts.main_menu(), style=UI_STYLE
                 ).ask()
 
                 if callable(answer):
@@ -60,15 +61,13 @@ class Menu:
     def confirm_session(
         session_type: type[AbstractPacketFilter] | str,
     ) -> Prompts.CONFIRM_SESSION_ANSWER:
-        pretty_print(Prompts.EXPLANATIONS[session_type])
-        session_type = (
-            session_type if isinstance(session_type, str) else session_type.__name__
-        )
+        name_key, explanation_key = Prompts.EXPLANATIONS[session_type]
+        pretty_print(t(explanation_key))
         return cast(
             Prompts.CONFIRM_SESSION_ANSWER,
             questionary.select(
-                f"Session type: {session_type}, are you sure?",
-                Prompts.CONFIRM_SESSION_OPTIONS,
+                t("confirm.question", name=t(name_key)),
+                Prompts.confirm_options(),
                 style=UI_STYLE,
             ).ask(),
         )
@@ -143,9 +142,9 @@ class Menu:
     def launch_auto_whitelisted_session() -> None:
         answer = Menu.confirm_session("Auto-Whitelisted")
         if answer and answer == Prompts.CONFIRM_SESSION_ANSWER.YES:
-            print("Collecting active IPs...")
+            print(t("session.collecting"))
             ip_set = Menu.collect_active_ips()
-            print("Checking for potential tunnels in collected IPs...")
+            print(t("session.checking_tunnels"))
             potential_tunnels = {
                 ip
                 for ip in ip_set
@@ -154,18 +153,7 @@ class Menu:
             }
             if potential_tunnels:
                 ip_answer = questionary.checkbox(
-                    f"WARNING! Guardian has detected {len(potential_tunnels)} IP"
-                    f"{'' if len(potential_tunnels) == 1 else 's'} in your current session that "
-                    "may be used for connection tunnelling, and may break session security if added "
-                    "to the whitelist.\nUnless you know what you're doing, it is HIGHLY RECOMMENDED "
-                    "that you DO NOT allow these IPs to be added to the whitelist.\nPlease note that "
-                    "excluding an IP from this list will likely result in players connected through "
-                    "that IP to be dropped from the session.\nIf this happens, then you may have to "
-                    "check both you and your friend's Windows Firewall settings to see why they can't "
-                    "directly connect to you.\nIf this is a false-positive and you are sure an IP is a "
-                    "direct connection, you can prevent this message from appearing by manually adding "
-                    "them to your Whitelist.\n\nSelect the potentially session-security-breaking IPs "
-                    "you wish to keep whitelisted, if any.",
+                    t("session.tunnel_warning", count=len(potential_tunnels)),
                     choices=list(potential_tunnels),
                     style=UI_STYLE,
                 ).ask()
@@ -174,7 +162,7 @@ class Menu:
                 for ip in potential_tunnels:
                     ip_set.remove(ip)
             else:
-                print("No potential tunnels identified")
+                print(t("session.no_tunnels"))
             session = WhitelistSession(
                 ip_set, Menu.context.priority, connection=Menu.child_conn
             )
@@ -197,7 +185,7 @@ class Menu:
             )
             Menu.context.add_filter(session)
             Menu.context.start_latest_filter()
-            for _ in trange(10, ascii=True, desc="Kicking unknowns..."):
+            for _ in trange(10, ascii=True, desc=t("session.kicking")):
                 time.sleep(1)
             Menu.context.kill_latest_filter()
 
@@ -207,7 +195,7 @@ class Menu:
         if answer and answer == Prompts.CONFIRM_SESSION_ANSWER.YES:
             ip_set = Menu.collect_active_ips()
             choices = questionary.checkbox(
-                "Select IPs to kick", list(ip_set), style=UI_STYLE
+                t("session.select_kick"), list(ip_set), style=UI_STYLE
             ).ask()
             for ip in choices:
                 ip_set.remove(ip)
@@ -216,14 +204,25 @@ class Menu:
             )
             Menu.context.add_filter(session)
             Menu.context.start_latest_filter()
-            for _ in trange(10, ascii=True, desc="Kicking unknowns..."):
+            for _ in trange(10, ascii=True, desc=t("session.kicking")):
                 time.sleep(1)
             Menu.context.kill_latest_filter()
 
     @staticmethod
     def open_discord() -> None:
-        print("Opening Discord URL...")
+        print(t("menu.opening_discord"))
         webbrowser.open(DISCORD_URL)
+
+    @staticmethod
+    def choose_language() -> None:
+        labels = {"fr": "Français", "en": "English"}
+        answer = questionary.select(
+            t("menu.choose_language"),
+            [{"name": labels[lang], "value": lang} for lang in LANGUAGES],
+            style=UI_STYLE,
+        ).ask()
+        if answer:
+            set_language(answer)
 
     @staticmethod
     def quit() -> None:
@@ -233,87 +232,54 @@ class Menu:
     def collect_active_ips(duration_seconds: int = 60) -> set[str]:
         collector = IPCollector(Menu.context.priority, packet_count_min_threshold=15)
         collector.start()
-        for _ in trange(duration_seconds, ascii=True, desc="Collecting session IPs"):
+        for _ in trange(duration_seconds, ascii=True, desc=t("session.collecting_bar")):
             time.sleep(1)
         collector.stop()
         return set(collector.ips)
 
 
 class Prompts:
-    MAIN_MENU = [
-        {"name": "Solo Session", "value": Menu.launch_solo_session},
-        {"name": "Whitelisted Session", "value": Menu.launch_whitelisted_session},
-        {"name": "Blacklisted Session", "value": Menu.launch_blacklisted_session},
-        {
-            "name": "Auto Whitelisted Session",
-            "value": Menu.launch_auto_whitelisted_session,
-        },
-        {"name": "Locked Session", "value": Menu.launch_locked_session},
-        {"name": "Kick unknowns", "value": Menu.kick_unknowns},
-        {
-            "name": "Empty Session (force Session Host)",
-            "value": Menu.launch_new_session,
-        },
-        {"name": "Kick by IP", "value": Menu.kick_by_ip},
-        {"name": "Session en direct (test)", "value": run_live_session},
-        {"name": "Edit lists", "value": Lists.choose_list},
-        {"name": "Speyedr's Discord", "value": Menu.open_discord},
-        {"name": "Quit", "value": Menu.quit},
-    ]
+    @staticmethod
+    def main_menu() -> list[dict[str, Any]]:
+        """Construit à chaque affichage pour suivre la langue choisie."""
+        return [
+            {"name": t("menu.solo"), "value": Menu.launch_solo_session},
+            {"name": t("menu.whitelist"), "value": Menu.launch_whitelisted_session},
+            {"name": t("menu.blacklist"), "value": Menu.launch_blacklisted_session},
+            {
+                "name": t("menu.auto_whitelist"),
+                "value": Menu.launch_auto_whitelisted_session,
+            },
+            {"name": t("menu.locked"), "value": Menu.launch_locked_session},
+            {"name": t("menu.kick_unknowns"), "value": Menu.kick_unknowns},
+            {"name": t("menu.new_session"), "value": Menu.launch_new_session},
+            {"name": t("menu.kick_by_ip"), "value": Menu.kick_by_ip},
+            {"name": t("menu.live"), "value": run_live_session},
+            {"name": t("menu.edit_lists"), "value": Lists.choose_list},
+            {"name": t("menu.language"), "value": Menu.choose_language},
+            {"name": t("menu.discord"), "value": Menu.open_discord},
+            {"name": t("menu.quit"), "value": Menu.quit},
+        ]
 
     class CONFIRM_SESSION_ANSWER(Enum):
         YES = "y"
         NO = "n"
 
-    CONFIRM_SESSION_OPTIONS = [
-        {"name": "Yes, start", "value": CONFIRM_SESSION_ANSWER.YES},
-        {"name": "No, go back", "value": CONFIRM_SESSION_ANSWER.NO},
-    ]
+    @staticmethod
+    def confirm_options() -> list[dict[str, Any]]:
+        return [
+            {"name": t("confirm.yes"), "value": Prompts.CONFIRM_SESSION_ANSWER.YES},
+            {"name": t("confirm.no"), "value": Prompts.CONFIRM_SESSION_ANSWER.NO},
+        ]
 
-    EXPLANATIONS = {
-        SoloSession: (
-            "No one can connect to your game session, but critical R* and SocialClub activity "
-            "will still go through.\nIf you are in a session with any other players, they will "
-            "lose connection to you."
-        ),
-        WhitelistSession: (
-            "Only IP addresses in your Whitelist will be allowed to connect to you.\nIf you are "
-            "the host of a session, anyone not in your Whitelist will likely lose connection to "
-            "the session.\nIf you are not the host (and any player in the session is not in your "
-            "Whitelist), you will lose connection to everyone else."
-        ),
-        BlacklistSession: (
-            "IP addresses in your Blacklist will not be allowed to connect to you.\nIf a "
-            "connection is routed through R* servers, that connection will also be blocked as a "
-            "security measure.\nThis mode is NOT RECOMMENDED as GTA Online has custom routing if "
-            "only a handful of IP addresses are blocked."
-        ),
-        LockedSession: (
-            "This mode blocks all join requests, preventing new players from entering the "
-            "session.\nAnyone already in the session will not be kicked out. This mode prevents "
-            "people from entering the session through R* servers if someone is being tunnelled "
-            "through a R* IP.\nHowever, if a player leaves the session, they will not be able to "
-            "join again."
-        ),
-        "Auto-Whitelisted": (
-            "Similar to Whitelisted session, except everybody currently in the session is "
-            "temporarily added to your whitelist, which prevents them from being kicked.\nAny "
-            "automatically collected IPs will be lost once the session ends.\nIf Guardian detects "
-            "that a player in your session is being routed through R* servers, you will be warned "
-            "and prompted whether you wish to add this IP to the temporary whitelist.\nIf you do "
-            "decide to allow these IPs, your session may not properly protected."
-        ),
-        "Kick Unknowns": (
-            "Attempts to kick any IP that is not on your Whitelist out of the session.\nKeeping "
-            "your sessions safe in this manner is NOT RECOMMENDED, as clients may try to route "
-            "unknown player traffic through IPs that are on your Whitelist."
-        ),
-        "New Session": (
-            "Splits you from the current session so you are alone. Being the only player in a "
-            "session ensures that you are the session Host."
-        ),
-        "Kick by IP": (
-            "Captures IPs in your session, then allows you to choose which IPs to kick.\nThis "
-            "mode is NOT RECOMMENDED for the same reason that kicking unknowns may not work."
-        ),
+    # Mode -> (clé du nom affiché, clé de l'explication)
+    EXPLANATIONS: dict[type[AbstractPacketFilter] | str, tuple[str, str]] = {
+        SoloSession: ("menu.solo", "explain.solo"),
+        WhitelistSession: ("menu.whitelist", "explain.whitelist"),
+        BlacklistSession: ("menu.blacklist", "explain.blacklist"),
+        LockedSession: ("menu.locked", "explain.locked"),
+        "Auto-Whitelisted": ("menu.auto_whitelist", "explain.auto_whitelist"),
+        "Kick Unknowns": ("menu.kick_unknowns", "explain.kick_unknowns"),
+        "New Session": ("menu.new_session", "explain.new_session"),
+        "Kick by IP": ("menu.kick_by_ip", "explain.kick_by_ip"),
     }

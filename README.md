@@ -176,14 +176,27 @@ User data (`data.json`, `db.json`, `history.log`, `debugger.log`) is stored in
 
 **Français** — Fonction expérimentale, non publiée. Menu principal → *Session en direct (test)*.
 
-- Tableau des pairs connectés : pays (vide pour l'instant, pas de base géo), heure de première
-  apparition, paquets/s, octets/s, taille moyenne et max (fenêtre glissante de 3 s).
+- Tableau des pairs connectés : pays avec drapeau (ex. `🇫🇷 FR`, `—` si IP privée ou inconnue),
+  heure de première apparition, paquets/s, octets/s, taille moyenne et max (fenêtre glissante de 3 s).
 - La « normale » de chaque pair est apprise pendant ses 60 premières secondes. Ligne orange
   (« inhabituel ») puis rouge (« suspect ») en cas de rafale ciblée, de paquets énormes ou de longues
   séries de petits paquets identiques. Seuils : en tête de `guardian/network/anomaly.py`.
-- Touches : `B` bloquer (immédiat + ajout à la Blacklist avec date et pseudo), `P` pseudo,
-  `D` débloquer, `A` auto-blocage, `E` enregistrement, `Q` retour.
-- Auto-blocage des IP rouges pendant 10 min : **désactivé par défaut**
-  (`"auto_block_suspect": true` dans `%LOCALAPPDATA%\Guardian\data.json` pour l'activer).
+- **Bouclier auto** (IP rouges uniquement) : **activé par défaut**, bloque l'IP pendant 10 min et
+  affiche `Bouclier auto : <ip> bloqué (rafale)`. Désactivable avec la touche `A` ou
+  `"auto_block_suspect": false` dans `%LOCALAPPDATA%\Guardian\data.json`.
+  Les IP orange ne sont **jamais** bloquées automatiquement : c'est le bouclier manuel (`B`).
+- Touches : `B` bloquer (immédiat + ajout à la liste noire avec date et pseudo), `P` pseudo,
+  `D` débloquer, `A` bouclier auto, `E` enregistrement, `Q` retour.
 - Enregistrement : uniquement des métadonnées (horodatage, IP, taille, sens), jamais le contenu,
   dans `%LOCALAPPDATA%\Guardian\enregistrements\`.
+
+## Langue / Language
+
+Menu principal → *Langue* : Français (par défaut) ou English. Réglage `"language": "fr"` / `"en"`
+dans `data.json`. Traductions : `guardian/util/i18n.py`.
+
+## Géolocalisation / Geolocation
+
+Base hors ligne (aucun appel réseau) : [sapics/ip-location-db](https://github.com/sapics/ip-location-db),
+jeu `geo-whois-asn-country` IPv4, licence **CC0-1.0** (domaine public). Fichier compact
+`guardian/util/geoip_ipv4.bin.gz` (~1 Mo), régénérable avec `tools/build_geoip.py`. Pays approximatif.

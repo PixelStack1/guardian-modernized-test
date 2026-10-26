@@ -15,6 +15,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum
 
+from util.i18n import t
+
 # ---------------------------------------------------------------------------
 # Seuils réglables (à ajuster d'après les enregistrements réels)
 # ---------------------------------------------------------------------------
@@ -69,10 +71,10 @@ class Level(IntEnum):
     SUSPECT = 2  # rouge
 
 
-LEVEL_LABELS = {
-    Level.NORMAL: "normal",
-    Level.INHABITUEL: "inhabituel",
-    Level.SUSPECT: "suspect",
+LEVEL_KEYS = {
+    Level.NORMAL: "level.normal",
+    Level.INHABITUEL: "level.inhabituel",
+    Level.SUSPECT: "level.suspect",
 }
 
 
@@ -133,6 +135,8 @@ class PeerState:
     anomaly_since: float | None = None
     last_anomaly: float | None = None
     alert: str = ""
+    # Clé de traduction de la cause principale (« reason.burst », ...).
+    reason_key: str = ""
 
     def learning(self, now: float) -> bool:
         return now - self.first_seen < BASELINE_SECONDS
@@ -213,6 +217,7 @@ class SessionMonitor:
             s = stats[peer.ip]
             others = [o for o in peers if o.ip != peer.ip]
             reasons: list[str] = []
+            keys: list[str] = []
             severe = False
 
             ratio = bursts[peer.ip]
@@ -225,9 +230,10 @@ class SessionMonitor:
                 if not session_wide:
                     assert peer.baseline_pps is not None
                     reasons.append(
-                        f"rafale de {s.pps:.0f} paquets/s, normale {peer.baseline_pps:.0f}"
-                        + (" (ciblée)" if others else "")
+                        t("anomaly.burst", pps=s.pps, base=peer.baseline_pps)
+                        + (t("anomaly.targeted") if others else "")
                     )
+                    keys.append("reason.burst")
                     severe = ratio >= BURST_RATIO_SEVERE
 
             others_max = max((o.max_size_ever for o in others), default=0)
@@ -236,15 +242,21 @@ class SessionMonitor:
                 and s.max_size > HUGE_MIN_BYTES
                 and s.max_size > HUGE_FACTOR * others_max
             ):
-                reasons.append(
-                    f"paquets énormes ({s.max_size} o, max des autres {others_max} o)"
-                )
+                reasons.append(t("anomaly.huge", size=s.max_size, others=others_max))
+                keys.append("reason.huge")
 
             if peer.tiny_run_length >= TINY_RUN_LENGTH:
                 reasons.append(
-                    f"{peer.tiny_run_length} petits paquets identiques de {peer.tiny_run_size} o"
+                    t(
+                        "anomaly.tiny",
+                        count=peer.tiny_run_length,
+                        size=peer.tiny_run_size,
+                    )
                 )
+                keys.append("reason.tiny")
 
+            if keys:
+                peer.reason_key = keys[0]
             self._update_level(peer, reasons, severe, now)
         return peers
 
@@ -269,3 +281,4 @@ class SessionMonitor:
             peer.anomaly_since = None
             peer.last_anomaly = None
             peer.alert = ""
+            peer.reason_key = ""

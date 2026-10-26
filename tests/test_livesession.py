@@ -20,11 +20,12 @@ class FakeList(dict):
         self.saved += 1
 
 
-def make(auto=False, existing=None):
+def make(auto=None, existing=None):
     clock = [1000.0]
     bl = FakeList(existing or {})
     blocked = {}
-    ctrl = ls.LiveSessionController(blocked, bl, auto, clock=lambda: clock[0])
+    kwargs = {} if auto is None else {"auto_block": auto}
+    ctrl = ls.LiveSessionController(blocked, bl, clock=lambda: clock[0], **kwargs)
     return ctrl, blocked, bl, clock
 
 
@@ -44,8 +45,20 @@ def test_manual_block_persists_with_pseudo_and_date():
     assert "1.1.1.1" not in bl and "1.1.1.1" not in blocked
 
 
-def test_auto_block_off_by_default():
-    ctrl, blocked, _, _ = make()
+def test_auto_block_on_by_default_red_only():
+    ctrl, blocked, bl, _ = make()
+    assert ctrl.auto_block
+    p = PeerState("1.1.1.1", 0, 0, level=Level.SUSPECT, reason_key="reason.burst")
+    assert ctrl.auto_block_if_needed(p)
+    assert "1.1.1.1" in blocked and "1.1.1.1" not in bl
+    assert ctrl.events[-1].startswith("Bouclier auto : 1.1.1.1 bloqué (rafale)")
+    orange = PeerState("2.2.2.2", 0, 0, level=Level.INHABITUEL)
+    assert not ctrl.auto_block_if_needed(orange)
+    assert "2.2.2.2" not in blocked
+
+
+def test_auto_block_can_be_disabled():
+    ctrl, blocked, _, _ = make(auto=False)
     p = PeerState("1.1.1.1", 0, 0, level=Level.SUSPECT)
     assert not ctrl.auto_block_if_needed(p)
     assert not blocked

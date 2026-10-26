@@ -28,14 +28,22 @@ from colorama import Fore, Style
 
 from config.configdata import ConfigData
 from config.globallist import Blacklist
-from network.anomaly import Level, PeerState, SessionMonitor
+from network.anomaly import LEVEL_KEYS, Level, PeerState, SessionMonitor
+from util.geoip import country_label
+from util.i18n import t
 
 # Priorité WinDivert du handle de la vue en direct (plus haute = vu en premier).
 LIVE_PRIORITY = 1000
 # Durée d'un blocage automatique (secondes).
 AUTO_BLOCK_SECONDS = 10 * 60
-# Clé de data.json pour activer l'auto-blocage des IP rouges (désactivé par défaut).
+# Clé de data.json du bouclier auto (IP rouges uniquement). ACTIVÉ si absente.
+# Les IP orange ne sont jamais bloquées automatiquement (bouclier manuel).
 AUTO_BLOCK_KEY = "auto_block_suspect"
+AUTO_BLOCK_DEFAULT = True
+# Fréquence d'évaluation des anomalies / du bouclier auto (secondes).
+EVAL_SECONDS = 0.1
+# Rafraîchissement de la liste de blocage dans le processus de capture (secondes).
+BLOCKLIST_REFRESH = 0.05
 REFRESH_SECONDS = 1.0
 QUEUE_MAX = 100_000
 
@@ -64,11 +72,18 @@ def capture_loop(
         contextlib.suppress(KeyboardInterrupt),
         open_windivert(priority=LIVE_PRIORITY, filter_=packet_filter(extra_ports)) as w,
     ):
+        # Copie locale de la liste partagée, rafraîchie toutes les BLOCKLIST_REFRESH s :
+        # évite un aller-retour inter-processus par paquet (latence en jeu).
+        local: dict[str, float] = dict(blocked)
+        next_refresh = 0.0
         for packet in w:
             inbound = bool(packet.is_inbound)
             ip = packet.ip.src_addr if inbound else packet.ip.dst_addr
             now = time.time()
-            if not (inbound and is_blocked(blocked, ip, now)):
+            if now >= next_refresh:
+                local = dict(blocked)
+                next_refresh = now + BLOCKLIST_REFRESH
+            if not (inbound and is_blocked(local, ip, now)):
                 w.send(packet)
             with contextlib.suppress(queue.Full):
                 out.put_nowait((now, ip, len(packet.payload), inbound))
@@ -78,7 +93,9 @@ def blacklist_label(pseudo: str, when: datetime) -> str:
     """Nom enregistré dans la Blacklist : pseudo/note + date de blocage."""
     stamp = when.strftime("%Y-%m-%d %H:%M:%S")
     pseudo = pseudo.strip()
-    return f"{pseudo} [bloqué le {stamp}]" if pseudo else f"Bloqué le {stamp}"
+    if pseudo:
+        return t("live.label", pseudo=pseudo, date=stamp)
+    return t("live.label_nopseudo", date=stamp)
 
 
 class LiveSessionController:
@@ -88,7 +105,7 @@ class LiveSessionController:
         self,
         blocked: MutableMapping[str, float],
         blacklist: Any,
-        auto_block: bool = False,
+        auto_block: bool = AUTO_BLOCK_DEFAULT,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.blocked = blocked
@@ -107,7 +124,7 @@ class LiveSessionController:
         self.blocked[ip] = PERMANENT
         self.blacklist.add(ip, blacklist_label(pseudo, datetime.now()))
         self.blacklist.save()
-        self.events.append(f"IP {ip} bloquée et ajoutée à la Blacklist")
+        self.events.append(t("live.ev.blocked", ip=ip))
 
     def auto_block_if_needed(self, peer: PeerState) -> bool:
         if not self.auto_block or peer.level < Level.SUSPECT:
@@ -116,7 +133,12 @@ class LiveSessionController:
             return False
         self.blocked[peer.ip] = self.clock() + AUTO_BLOCK_SECONDS
         self.events.append(
-            f"IP {peer.ip} bloquée automatiquement pour {AUTO_BLOCK_SECONDS // 60} min"
+            t(
+                "live.ev.auto",
+                ip=peer.ip,
+                reason=t(peer.reason_key or "reason.burst"),
+                minutes=AUTO_BLOCK_SECONDS // 60,
+            )
         )
         return True
 
@@ -125,22 +147,22 @@ class LiveSessionController:
         if remove_from_blacklist and ip in self.blacklist:
             self.blacklist.remove(ip)
             self.blacklist.save()
-        self.events.append(f"IP {ip} débloquée")
+        self.events.append(t("live.ev.unblocked", ip=ip))
 
     def expire(self) -> None:
         now = self.clock()
         for ip, expiry in list(self.blocked.items()):
             if expiry != PERMANENT and now >= expiry:
                 self.blocked.pop(ip, None)
-                self.events.append(f"Blocage automatique de {ip} expiré")
+                self.events.append(t("live.ev.expired", ip=ip))
 
     def block_status(self, ip: str) -> str:
         expiry = self.blocked.get(ip)
         if expiry is None:
             return ""
         if expiry == PERMANENT:
-            return "BLOQUÉE"
-        return f"BLOQUÉE {max(0, int(expiry - self.clock())) // 60 + 1} min"
+            return t("live.blocked")
+        return t("live.blocked_min", m=max(0, int(expiry - self.clock())) // 60 + 1)
 
 
 LEVEL_COLORS = {
@@ -158,38 +180,47 @@ def render(
     now: float,
 ) -> str:
     lines = [
-        Style.BRIGHT
-        + "Guardian — Session en direct (version de test)"
-        + Style.RESET_ALL,
-        f"Auto-blocage (rouge, {AUTO_BLOCK_SECONDS // 60} min) : "
-        f"{'ACTIVÉ' if ctrl.auto_block else 'désactivé'}   Enregistrement : {recording}",
+        Style.BRIGHT + t("live.title") + Style.RESET_ALL,
+        t(
+            "live.status",
+            minutes=AUTO_BLOCK_SECONDS // 60,
+            auto=t("live.on") if ctrl.auto_block else t("live.off"),
+            rec=recording,
+        ),
         "",
-        f"{'#':>2}  {'IP':<15}  {'Pays':<4}  {'Vu depuis':<9}  {'Paq/s':>6}  "
-        f"{'Oct/s':>8}  {'Moy':>5}  {'Max':>5}  {'État':<10}  Pseudo",
+        t(
+            "live.header",
+            n="#",
+            ip="IP",
+            country=t("live.col.country"),
+            seen=t("live.col.seen"),
+            pps=t("live.col.pps"),
+            bps=t("live.col.bps"),
+            avg=t("live.col.avg"),
+            max=t("live.col.max"),
+            state=t("live.col.state"),
+        ),
     ]
     alerts = []
     for i, p in enumerate(peers, 1):
         s = p.window.stats(now)
         state = ctrl.block_status(p.ip) or (
-            "apprent." if p.learning(now) else Level(p.level).name.lower()
+            t("level.learning") if p.learning(now) else t(LEVEL_KEYS[Level(p.level)])
         )
         first = datetime.fromtimestamp(p.first_seen).strftime("%H:%M:%S")
         row = (
-            f"{i:>2}  {p.ip:<15}  {'':<4}  {first:<9}  {s.pps:>6.0f}  "
-            f"{s.bps:>8.0f}  {s.avg_size:>5.0f}  {s.max_size:>5}  {state:<10}  "
-            f"{ctrl.pseudos.get(p.ip, '')}"
+            f"{i:>2}  {p.ip:<15}  {country_label(p.ip):<5}  {first:<10}  "
+            f"{s.pps:>6.0f}  {s.bps:>8.0f}  {s.avg_size:>5.0f}  {s.max_size:>5}  "
+            f"{state:<10}  {ctrl.pseudos.get(p.ip, '')}"
         )
         color = LEVEL_COLORS[p.level]
         lines.append(color + row + Style.RESET_ALL if color else row)
         if p.alert:
             alerts.append(color + p.alert + Style.RESET_ALL)
     if not peers:
-        lines.append("(aucun pair connecté)")
+        lines.append(t("live.no_peers"))
     lines += ["", *alerts, *ctrl.events[-5:], ""]
-    lines.append(
-        "[B] Bloquer  [P] Pseudo  [D] Débloquer  [A] Auto-blocage  "
-        "[E] Enregistrement  [Q] Retour"
-    )
+    lines.append(t("live.keys"))
     return "\n".join(lines)
 
 
@@ -203,7 +234,7 @@ def _ask_row(peers: list[PeerState], prompt: str) -> PeerState | None:
 def run_live_session() -> None:  # pragma: no cover - interactif, Windows uniquement
     """Point d'entrée du menu principal."""
     if sys.platform != "win32":
-        print("La vue Session en direct nécessite Windows.")
+        print(t("live.windows_only"))
         return
     import msvcrt
 
@@ -217,7 +248,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
     ctrl = LiveSessionController(
         blocked,
         Blacklist(),
-        auto_block=bool(config.data.get(AUTO_BLOCK_KEY, False)),
+        auto_block=bool(config.data.get(AUTO_BLOCK_KEY, AUTO_BLOCK_DEFAULT)),
     )
     monitor = SessionMonitor()
     recorder = MetadataRecorder()
@@ -228,21 +259,32 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
     try:
         while True:
             deadline = time.monotonic() + REFRESH_SECONDS
-            while time.monotonic() < deadline:
+            next_eval = time.monotonic() + EVAL_SECONDS
+            peers: list[PeerState] = []
+            while True:
                 try:
-                    ts, ip, size, inbound = packets.get(timeout=0.05)
+                    ts, ip, size, inbound = packets.get(timeout=0.02)
+                    recorder.write(ts, ip, size, inbound)
+                    if inbound:
+                        monitor.add_packet(ip, size, ts)
                 except queue.Empty:
-                    continue
-                recorder.write(ts, ip, size, inbound)
-                if inbound:
-                    monitor.add_packet(ip, size, ts)
-            now = time.time()
-            ctrl.expire()
-            peers = monitor.evaluate(now)
-            for p in peers:
-                ctrl.auto_block_if_needed(p)
+                    pass
+                if time.monotonic() >= next_eval:
+                    # Bouclier auto évalué toutes les EVAL_SECONDS, pas seulement à l'affichage.
+                    next_eval = time.monotonic() + EVAL_SECONDS
+                    now = time.time()
+                    ctrl.expire()
+                    peers = monitor.evaluate(now)
+                    for p in peers:
+                        ctrl.auto_block_if_needed(p)
+                    if time.monotonic() >= deadline:
+                        break
             monitor.prune(now)
-            rec = f"ON ({recorder.path})" if recorder.active else "désactivé"
+            rec = (
+                t("live.rec_on", path=recorder.path)
+                if recorder.active
+                else t("live.off")
+            )
             os.system("cls")
             print(render(monitor, ctrl, peers, rec, now))
 
@@ -252,19 +294,21 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
             if key == "q":
                 break
             if key == "b":
-                peer = _ask_row(peers, "Numéro de la ligne à bloquer : ")
+                peer = _ask_row(peers, t("live.ask_block"))
                 if peer:
-                    pseudo = input("Pseudo / note (optionnel) : ")
+                    pseudo = input(t("live.ask_pseudo"))
                     ctrl.block(peer.ip, pseudo)
             elif key == "p":
-                peer = _ask_row(peers, "Numéro de la ligne : ")
+                peer = _ask_row(peers, t("live.ask_row"))
                 if peer:
-                    ctrl.pseudos[peer.ip] = input(f"Pseudo pour {peer.ip} : ").strip()
+                    ctrl.pseudos[peer.ip] = input(
+                        t("live.ask_pseudo_for", ip=peer.ip)
+                    ).strip()
             elif key == "d":
                 ips = list(blocked.keys())
                 for i, ip in enumerate(ips, 1):
                     print(f"{i:>2}  {ip}  {ctrl.block_status(ip)}")
-                answer = input("Numéro de l'IP à débloquer : ").strip()
+                answer = input(t("live.ask_unblock")).strip()
                 if answer.isdigit() and 1 <= int(answer) <= len(ips):
                     ctrl.unblock(ips[int(answer) - 1])
             elif key == "a":

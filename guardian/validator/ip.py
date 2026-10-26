@@ -7,6 +7,7 @@ from prompt_toolkit.document import Document
 from questionary import ValidationError, Validator
 
 from config.globallist import Blacklist, GlobalList, Whitelist
+from util.i18n import t
 
 ipv4 = re.compile(r"((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}")
 
@@ -17,7 +18,7 @@ class IPValidator(Validator):
 
     def validate(self, document: Document) -> None:
         error = ValidationError(
-            message="Invalid IP", cursor_position=len(document.text)
+            message=t("valid.invalid_ip"), cursor_position=len(document.text)
         )
         ip = document.text
         if not ipv4.match(ip):
@@ -27,13 +28,15 @@ class IPValidator(Validator):
         except OSError:
             raise error from None
         if ip in self.list:
-            raise ValidationError(message="IP already in list", cursor_position=len(ip))
+            raise ValidationError(message=t("valid.ip_exists"), cursor_position=len(ip))
 
     # TODO: Add an extra validator to check if an IP could be used by R* services (i.e. it's part of Microsoft Azure)
 
     @staticmethod
     def validate_get(text: str) -> str:
-        error = ValidationError(message="Invalid IP", cursor_position=len(text))
+        error = ValidationError(
+            message=t("valid.invalid_ip"), cursor_position=len(text)
+        )
         with contextlib.suppress(socket.error):
             if ipv4.match(text):
                 socket.inet_aton(text)
