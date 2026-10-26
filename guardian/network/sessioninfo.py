@@ -62,12 +62,12 @@ from network.iptag import IPTag
 #  ================================
 #         IP       | Packets IN | Packets IN/s | Bytes IN | Bytes IN/s | Packets OUT | Packets OUT/s | Bytes OUT | Bytes OUT/s | Last Seen | # Pckts Allowed | # Pckts Dropped | Tags and Info
 #  192.168.0.235   |      0     |      0.0     |     0    |     0.0    |      0      |      0.0      |     0     |     0.0     |   NEVER   |        0        |        0        |    LOCAL IP
-#  172.68.2.143    |      0     |      0.0     |     0    |     0.0    |      0      |      0.0      |     0     |     0.0     |   NEVER   |        0        |        0        |    PUBLIC IP
+#  203.0.113.10    |      0     |      0.0     |     0    |     0.0    |      0      |      0.0      |     0     |     0.0     |   NEVER   |        0        |        0        |    PUBLIC IP
 #  255.255.255.255 |     24     |      0.0     |     0    |     0.0    |      0      |      0.0      |     0     |     0.0     |    10s    |       24        |        0        |   R* SERVICES
-#  85.42.1.15      |                                                                                                                                                           |     UNKNOWN       (CRP, IT)
-#  101.172.93.149  |                                                                                                                                                           |     UNKNOWN       (RES, AU)
-#  1.145.210.255   |                                                                                                                                                           |     UNKNOWN       (MBL, AU)
-#  66.176.75.199   |                                                                                                                                                           |   1x JOIN REQ.    (RES, US)
+#  192.0.2.15      |                                                                                                                                                           |     UNKNOWN       (CRP, IT)
+#  198.51.100.149  |                                                                                                                                                           |     UNKNOWN       (RES, AU)
+#  192.0.2.255     |                                                                                                                                                           |     UNKNOWN       (MBL, AU)
+#  203.0.113.199   |                                                                                                                                                           |   1x JOIN REQ.    (RES, US)
 #                  |                                                                                                                                                           | 1x REQ. 1x CNFM.
 #                  |                                                                                                                                                           |   2x JOIN CNFM.
 #                  |                                                                                                                                                           |    CONNECTED      [TessioMT]
