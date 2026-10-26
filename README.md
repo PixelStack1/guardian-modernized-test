@@ -172,6 +172,27 @@ User data (`data.json`, `db.json`, `history.log`, `debugger.log`) is stored in
 - **Safest** before games with kernel anti-cheat (Valorant/Vanguard, BattlEye, Easy Anti-Cheat):
   reboot, then check with `sc query WinDivert`.
 
+## Session publique en hôte au départ / Public session, host first
+
+Entrée de menu « Session publique en hôte au départ » (EN : « Public session, host first »). Elle
+n'est active que si tu la choisis dans le menu.
+
+1. **Phase 1, 60 secondes fixes** (`HOST_FIRST_SECONDS` dans `guardian/network/sessions.py`, aucun
+   réglage, aucune touche) : exactement le filtrage de la session solo (`SoloSession`) — les
+   heartbeats et le trafic Rockstar/Take-Two sur les ports 61455-61458 passent, les demandes
+   d'entrée (joins) sont jetées. Un compte à rebours s'affiche. Lance à ce moment une nouvelle
+   session publique dans le jeu : seul, tu en deviens l'hôte.
+2. **Phase 2** : au bout de 60 s, réouverture **automatique** (« Session ouverte ») : simple
+   transfert, aucun join bloqué, comme une session publique normale ; le handle WinDivert est
+   ensuite fermé. Pas de touche pour rouvrir plus tôt.
+
+Uniquement du rejet pendant la phase 1 : aucun paquet n'est fabriqué, modifié ni envoyé, et le jeu
+n'est ni lu ni modifié.
+
+⚠️ **Guardian ne peut pas vérifier que tu es hôte** ; les **60 s sont une estimation** du temps
+nécessaire pour créer la session. Une fois hôte, **les nouveaux joueurs qui arrivent ne te retirent
+pas l'hôte** (l'hôte ne change que s'il quitte la session).
+
 ## Session en direct (version de test)
 
 **Français** — Fonction expérimentale, non publiée. Menu principal → *Session en direct (test)*.

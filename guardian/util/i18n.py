@@ -31,6 +31,28 @@ STRINGS: dict[str, dict[str, str]] = {
         "fr": "Session vide (forcer l'hôte de session)",
         "en": "Empty Session (force Session Host)",
     },
+    "menu.host_first": {
+        "fr": "Session publique en hôte au départ",
+        "en": "Public session, host first",
+    },
+    "explain.host_first": {
+        "fr": "Pendant 60 secondes, personne ne peut rejoindre (comme la session solo) : "
+        "lance une nouvelle session publique dans le jeu pour en devenir l'hôte.\nEnsuite la "
+        "session se rouvre toute seule et les joueurs peuvent rejoindre normalement.\n"
+        "Guardian ne peut pas vérifier que tu es hôte ; 60 s est une estimation.",
+        "en": "For 60 seconds nobody can join (like Solo Session): start a new public "
+        "session in the game to become its host.\nThen the session reopens on its own and "
+        "players can join normally.\nGuardian cannot check that you are host; 60 s is an "
+        "estimate.",
+    },
+    "host_first.countdown": {
+        "fr": "Phase hôte : joins bloqués, réouverture dans {s} s   ",
+        "en": "Host phase: joins blocked, reopening in {s} s   ",
+    },
+    "host_first.opened": {
+        "fr": "Session ouverte : les joueurs peuvent rejoindre normalement.",
+        "en": "Session open: players can join normally.",
+    },
     "menu.kick_by_ip": {"fr": "Expulser par IP", "en": "Kick by IP"},
     "menu.live": {"fr": "Session en direct (test)", "en": "Live session (test)"},
     "menu.edit_lists": {"fr": "Modifier les listes", "en": "Edit lists"},

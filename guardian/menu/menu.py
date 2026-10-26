@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 import webbrowser
@@ -13,11 +14,13 @@ from tqdm import trange
 from config.configdata import ConfigData
 from config.globallist import Blacklist, Whitelist
 from dispatcher.context import Context
+from menu.hostfirst import host_first_countdown
 from menu.lists import Lists
 from menu.livesession import run_live_session
 from network.sessions import (
     AbstractPacketFilter,
     BlacklistSession,
+    HostFirstSession,
     IPCollector,
     LockedSession,
     SoloSession,
@@ -129,6 +132,18 @@ class Menu:
         Menu.launch_session(
             LockedSession, priority=Menu.context.priority, connection=Menu.child_conn
         )
+
+    @staticmethod
+    def launch_host_first_session() -> None:
+        answer = Menu.confirm_session(HostFirstSession)
+        if not (answer and answer == Prompts.CONFIRM_SESSION_ANSWER.YES):
+            return
+        session = HostFirstSession(Menu.context.priority, connection=Menu.child_conn)
+        Menu.context.add_filter(session)
+        Menu.context.start_latest_filter()
+        # Ctrl+C n'interrompt que l'affichage : la réouverture reste automatique.
+        with contextlib.suppress(KeyboardInterrupt):
+            host_first_countdown(session)
 
     @staticmethod
     def launch_new_session() -> None:
@@ -253,6 +268,7 @@ class Prompts:
             {"name": t("menu.locked"), "value": Menu.launch_locked_session},
             {"name": t("menu.kick_unknowns"), "value": Menu.kick_unknowns},
             {"name": t("menu.new_session"), "value": Menu.launch_new_session},
+            {"name": t("menu.host_first"), "value": Menu.launch_host_first_session},
             {"name": t("menu.kick_by_ip"), "value": Menu.kick_by_ip},
             {"name": t("menu.live"), "value": run_live_session},
             {"name": t("menu.edit_lists"), "value": Lists.choose_list},
@@ -275,6 +291,7 @@ class Prompts:
     # Mode -> (clé du nom affiché, clé de l'explication)
     EXPLANATIONS: dict[type[AbstractPacketFilter] | str, tuple[str, str]] = {
         SoloSession: ("menu.solo", "explain.solo"),
+        HostFirstSession: ("menu.host_first", "explain.host_first"),
         WhitelistSession: ("menu.whitelist", "explain.whitelist"),
         BlacklistSession: ("menu.blacklist", "explain.blacklist"),
         LockedSession: ("menu.locked", "explain.locked"),

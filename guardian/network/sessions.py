@@ -3,8 +3,9 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from multiprocessing import Manager, Process
 from multiprocessing.managers import DictProxy, ListProxy
 from typing import TYPE_CHECKING
@@ -245,6 +246,11 @@ class AbstractPacketFilter(ABC):
     def is_packet_allowed(self, packet: pydivert.Packet) -> bool:
         pass
 
+    def finished(self) -> bool:
+        """True = le filtre a terminé son travail : la boucle s'arrête et le handle
+        WinDivert est fermé (le trafic redevient normal, sans Guardian)."""
+        return False
+
     def run(self) -> None:
         with contextlib.suppress(KeyboardInterrupt):
             self.queue.send(True)
@@ -261,6 +267,9 @@ class AbstractPacketFilter(ABC):
 
                     if self.debug_print_decisions:
                         print(self.construct_debug_packet_info(packet, decision))
+
+                    if self.finished():
+                        break
 
     @staticmethod
     def construct_debug_packet_info(
@@ -294,6 +303,45 @@ class SoloSession(AbstractPacketFilter):
         size = len(packet.payload)
 
         return size in HEARTBEAT_SIZES
+
+
+# « Session publique en hôte au départ » : durée FIXE de la phase solo (secondes).
+# Volontairement non réglable (ni option, ni touche).
+HOST_FIRST_SECONDS = 60
+
+
+class HostFirstSession(SoloSession):
+    """Phase 1 (HOST_FIRST_SECONDS) : filtrage SoloSession inchangé (les joins entrants
+    sont jetés). Phase 2 : réouverture automatique, simple transfert sans blocage, puis
+    fermeture du handle WinDivert. Uniquement du drop : aucun paquet créé ni modifié."""
+
+    def __init__(
+        self,
+        priority: int,
+        connection: PipeConnection,
+        session_info: SessionInfo | None = None,
+        debug: bool = False,
+        open_at: float | None = None,
+        clock: Callable[[], float] = time.time,
+    ):
+        super().__init__(priority, connection, session_info, debug)
+        self.clock = clock
+        # Horodatage (epoch, partagé entre processus) de la réouverture.
+        self.open_at = clock() + HOST_FIRST_SECONDS if open_at is None else open_at
+
+    def is_open(self) -> bool:
+        return self.clock() >= self.open_at
+
+    def remaining(self) -> float:
+        return max(0.0, self.open_at - self.clock())
+
+    def is_packet_allowed(self, packet: pydivert.Packet) -> bool:
+        if self.is_open():
+            return True  # phase 2 : session publique normale
+        return super().is_packet_allowed(packet)
+
+    def finished(self) -> bool:
+        return self.is_open()
 
 
 class WhitelistSession(AbstractPacketFilter):
