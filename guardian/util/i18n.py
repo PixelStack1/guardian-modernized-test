@@ -309,6 +309,10 @@ STRINGS: dict[str, dict[str, str]] = {
     "live.col.avg": {"fr": "Moy", "en": "Avg"},
     "live.col.max": {"fr": "Max", "en": "Max"},
     "live.col.state": {"fr": "État", "en": "State"},
+    "live.players": {
+        "fr": "Joueurs : {n} (normaux {normal}, bloqués {blocked}, coupés {cut})",
+        "en": "Players: {n} (normal {normal}, blocked {blocked}, cut {cut})",
+    },
     "live.no_peers": {"fr": "(aucun pair connecté)", "en": "(no connected peer)"},
     "live.keys": {
         "fr": "[B] Bloquer  [P] Pseudo  [D] Débloquer  [A] Bouclier auto  "

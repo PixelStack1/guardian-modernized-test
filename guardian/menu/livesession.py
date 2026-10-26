@@ -175,6 +175,77 @@ def capture_loop(
                 out.put_nowait((now, ip, len(packet.payload), inbound, int(port or 0)))
 
 
+# -- compteur de joueurs en direct ------------------------------------------------
+# Un joueur = IP de pair vue récemment sur les ports de Guardian (le flux de la vue
+# en direct est déjà limité par packet_filter). Inactif depuis PLAYER_TIMEOUT_SECONDS
+# (horloge monotone) : il n'est plus compté.
+PLAYER_TIMEOUT_SECONDS = 60.0
+# Borne mémoire du compteur (au-delà, le joueur le plus ancien est oublié).
+MAX_PLAYERS = 1024
+
+
+class PlayerCounter:
+    """Dernier passage (monotone) par IP de pair, O(1) par paquet, borné et purgé.
+
+    Alimenté côté affichage (jamais dans capture_loop) avec les seules métadonnées
+    déjà transmises (IP, horodatage) : aucun verrou, aucune lecture de charge utile."""
+
+    def __init__(
+        self,
+        timeout: float = PLAYER_TIMEOUT_SECONDS,
+        max_players: int = MAX_PLAYERS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.timeout = timeout
+        self.max_players = max_players
+        self.clock = clock
+        self.last_seen: dict[str, float] = {}  # ordre d'insertion = ordre d'activité
+
+    def seen(self, ip: str) -> None:
+        now = self.clock()
+        last = self.last_seen
+        if ip in last:
+            del last[ip]  # remis en fin : le plus ancien reste en tête
+        elif len(last) >= self.max_players:
+            del last[next(iter(last))]
+            logger.debug("Compteur de joueurs plein : le plus ancien est oublié")
+        last[ip] = now
+
+    def purge(self) -> None:
+        limit = self.clock() - self.timeout
+        last = self.last_seen
+        while last:
+            ip = next(iter(last))
+            if last[ip] > limit:
+                break
+            del last[ip]
+
+    def players(self) -> list[str]:
+        self.purge()
+        return list(self.last_seen)
+
+    def counts(
+        self, ctrl: LiveSessionController, now: float | None = None
+    ) -> tuple[int, int, int, int]:
+        """(total, normaux, bloqués, coupés). Bloqué : Blacklist ou blocage auto.
+        Coupé : sortant actuellement coupé par le blocage total."""
+        now = ctrl.clock() if now is None else now
+        normal = blocked = cut = 0
+        for ip in self.players():
+            if is_blocked(ctrl.blocked, ip, now):
+                blocked += 1
+            elif ctrl.total_block and now < ctrl.total_blocked.get(ip, 0.0):
+                cut += 1
+            else:
+                normal += 1
+        return normal + blocked + cut, normal, blocked, cut
+
+
+def players_line(counter: PlayerCounter, ctrl: LiveSessionController) -> str:
+    total, normal, blocked, cut = counter.counts(ctrl)
+    return t("live.players", n=total, normal=normal, blocked=blocked, cut=cut)
+
+
 def blacklist_label(pseudo: str, when: datetime) -> str:
     """Nom enregistré dans la Blacklist : pseudo/note + date de blocage."""
     stamp = when.strftime("%Y-%m-%d %H:%M:%S")
@@ -416,9 +487,11 @@ def render(
     peers: list[PeerState],
     recording: str,
     now: float,
+    players: PlayerCounter | None = None,
 ) -> str:
     lines = [
         Style.BRIGHT + t("live.title") + Style.RESET_ALL,
+        *([players_line(players, ctrl)] if players is not None else []),
         t(
             "live.status",
             days=AUTO_BLOCK_SECONDS // 86400,
@@ -503,6 +576,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
     from network.incident import ReportWriter, build_report
 
     monitor = SessionMonitor()
+    player_counter = PlayerCounter()
     writer = ReportWriter()
 
     def reporter(ip: str, kind: str, pseudo: str) -> None:
@@ -548,6 +622,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
                 try:
                     ts, ip, size, inbound, port = packets.get(timeout=0.02)
                     recorder.write(ts, ip, size, inbound)
+                    player_counter.seen(ip)
                     if inbound:
                         monitor.add_packet(ip, size, ts, port)
                 except queue.Empty:
@@ -569,7 +644,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
                 else t("live.off")
             )
             os.system("cls")
-            print(render(monitor, ctrl, peers, rec, now))
+            print(render(monitor, ctrl, peers, rec, now, player_counter))
 
             if not msvcrt.kbhit():
                 continue
