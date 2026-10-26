@@ -119,7 +119,7 @@ def test_toggle_auto_shield_no_prompt_persists_and_header_updates():
     head = " ".join(ls.render_head(ctrl, "off"))
     assert "ACTIVÉ" in head or "ON" in head
     frame = ls.render(SessionMonitor(), ctrl, [], "off", 0.0, size=(200, 30))
-    assert ctrl.events[-1] in frame
+    assert ctrl.toggle_msg is not None and ctrl.toggle_msg[0] in frame
     ls.handle_key("a", ctrl, [], {}, FakeRecorder(), no_prompt, cfg)
     assert ctrl.auto_block is False and cfg.data[ls.AUTO_BLOCK_KEY] is False
 
@@ -182,3 +182,31 @@ def test_no_test_version_marker():
     for key in ("live.title", "menu.live"):
         for text in i18n.STRINGS[key].values():
             assert "test" not in text.lower()
+
+
+def test_toggle_messages_single_line_replaced_and_expire():
+    from colorama import Fore
+
+    now = [1000.0]
+    ctrl = ls.LiveSessionController(
+        {}, FakeList(), clock=lambda: now[0], auto_block_available=True
+    )
+    cfg = FakeConfig()
+    for key in ("a", "t", "a", "t", "a"):
+        ls.handle_key(key, ctrl, [], {}, FakeRecorder(), no_prompt, cfg)
+    frame = ls.render(SessionMonitor(), ctrl, [], "off", 0.0, size=(200, 30))
+    shown = [
+        line
+        for line in frame.split("\n")
+        if ls._ANSI.sub("", line).startswith(
+            ("Bouclier auto :", "Blocage total :", "Auto shield:", "Total block:")
+        )
+    ]
+    assert len(shown) == 1  # un seul message, le dernier (A -> bouclier activé)
+    assert Fore.GREEN in shown[0]
+    ls.handle_key("a", ctrl, [], {}, FakeRecorder(), no_prompt, cfg)
+    assert ctrl.auto_block is False
+    assert ctrl.toggle_msg is not None and Fore.RED in ctrl.toggle_msg[0]
+    now[0] += ls.TOGGLE_MSG_SECONDS + 1
+    assert ls.toggle_line(ctrl) == []
+    assert ctrl.toggle_msg is None
