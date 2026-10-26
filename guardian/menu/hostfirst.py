@@ -65,7 +65,7 @@ def _dead_reason(conn: Any) -> str:
             msg = conn.recv()
             if isinstance(msg, tuple) and len(msg) == 2 and msg[0] == HOST_FIRST_FAILED:
                 return str(msg[1])
-    except (EOFError, OSError):
+    except Exception:
         pass
     return "process not alive"
 

@@ -475,3 +475,23 @@ def test_dead_process_recv_errors_are_protected(conn):
         broken.recv.side_effect = exc
         with pytest.raises(FilterStartFailed, match="process not alive"):
             wait_until_started(make(conn, Clock()), broken, is_alive=lambda: False)
+
+
+def _dead_with_recv_error(conn, exc):
+    from guardian.menu.hostfirst import FilterStartFailed, wait_until_started
+
+    broken = mock.MagicMock()
+    broken.poll.return_value = True
+    broken.recv.side_effect = exc
+    with pytest.raises(FilterStartFailed, match="process not alive"):
+        wait_until_started(make(conn, Clock()), broken, is_alive=lambda: False)
+
+
+def test_dead_process_recv_unpickling_error_falls_back(conn):
+    import pickle
+
+    _dead_with_recv_error(conn, pickle.UnpicklingError("corrupted"))
+
+
+def test_dead_process_recv_value_error_falls_back(conn):
+    _dead_with_recv_error(conn, ValueError("bad"))
