@@ -14,7 +14,12 @@ from tqdm import trange
 from config.configdata import ConfigData
 from config.globallist import Blacklist, Whitelist
 from dispatcher.context import Context
-from menu.hostfirst import drain, host_first_countdown, wait_until_started
+from menu.hostfirst import (
+    FilterStartFailed,
+    drain,
+    host_first_countdown,
+    wait_until_started,
+)
 from menu.lists import Lists
 from menu.livesession import run_live_session
 from network.sessions import (
@@ -143,7 +148,17 @@ class Menu:
         Menu.context.add_filter(session)
         Menu.context.start_latest_filter()
         # Le compte à rebours ne démarre qu'une fois le filtre réellement lancé (max 10 s).
-        wait_until_started(session, Menu.parent_conn)
+        # Filtre mort, sorti pendant l'attente ou WinDivert non ouvert : pas de
+        # « Session ouverte » ni de compte à rebours, message d'erreur et retour au menu.
+        try:
+            wait_until_started(
+                session, Menu.parent_conn, is_alive=session.process.is_alive
+            )
+        except FilterStartFailed as e:
+            debug_logger.warning("Host-first filter failed to start: %s", e)
+            print(t("host_first.failed"))
+            Menu.context.kill_latest_filter()
+            return
         # Ctrl+C n'interrompt que l'affichage : la réouverture reste automatique.
         with contextlib.suppress(KeyboardInterrupt):
             host_first_countdown(session)

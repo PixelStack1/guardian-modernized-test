@@ -302,3 +302,142 @@ def test_menu_waits_before_countdown():
     body = MENU_SRC[i : MENU_SRC.index("@staticmethod", i)]
     assert body.index("start_latest_filter") < body.index("wait_until_started")
     assert body.index("wait_until_started") < body.index("host_first_countdown")
+
+
+# -- durée annoncée validée, échecs du filtre, read_flag journalisé -------------
+
+
+def _started_with(conn, payload):
+    from multiprocessing import Pipe
+
+    from guardian.menu.hostfirst import wait_until_started
+
+    parent, child = Pipe()
+    clock = Clock(1000.0)
+    sess = make(conn, clock)
+    child.send((s.HOST_FIRST_STARTED, payload))
+    assert wait_until_started(sess, parent, timeout=2)
+    return sess
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        -5.0,
+        0,
+        0.0,
+        60.0001,
+        3600,
+        "30",
+        None,
+        True,
+    ],
+)
+def test_invalid_announced_duration_falls_back(conn, bad):
+    sess = _started_with(conn, bad)
+    assert sess.open_at == 1000.0 + sess.duration == 1060.0
+
+
+@pytest.mark.parametrize("good", [0.5, 30, 45.0, 60])
+def test_valid_announced_duration_used(conn, good):
+    assert _started_with(conn, good).open_at == 1000.0 + good
+
+
+def test_read_flag_logs_exception_at_debug(caplog):
+    import logging
+
+    from guardian.menu import livesession as ls
+
+    class Broken:
+        @property
+        def value(self):
+            raise RuntimeError("boom")
+
+    with caplog.at_level(logging.DEBUG, logger=ls.logger.name):
+        assert ls.read_flag(Broken()) is False
+    rec = [r for r in caplog.records if r.name == ls.logger.name]
+    assert rec and rec[0].levelno == logging.DEBUG
+    assert rec[0].exc_info and isinstance(rec[0].exc_info[1], RuntimeError)
+
+
+def test_dead_process_raises_before_countdown(conn):
+    from guardian.menu.hostfirst import FilterStartFailed, wait_until_started
+
+    parent = mock.MagicMock()
+    parent.poll.return_value = False
+    with pytest.raises(FilterStartFailed):
+        wait_until_started(
+            make(conn, Clock()), parent, timeout=1, is_alive=lambda: False
+        )
+
+
+def test_process_exits_during_wait(conn):
+    from guardian.menu.hostfirst import FilterStartFailed, wait_until_started
+
+    clock = Clock(1000.0)
+    alive = iter([True, True, False])
+
+    class Silent:
+        def poll(self, t):
+            clock.now += t
+            return False
+
+    with pytest.raises(FilterStartFailed):
+        wait_until_started(
+            make(conn, clock),
+            Silent(),
+            timeout=10,
+            clock=clock,
+            is_alive=lambda: next(alive, False),
+        )
+
+
+def test_failure_message_from_child_raises(conn):
+    from multiprocessing import Pipe
+
+    from guardian.menu.hostfirst import FilterStartFailed, wait_until_started
+
+    parent, child = Pipe()
+    child.send((s.HOST_FIRST_FAILED, "OSError: access denied"))
+    with pytest.raises(FilterStartFailed, match="access denied"):
+        wait_until_started(
+            make(conn, Clock()), parent, timeout=2, is_alive=lambda: True
+        )
+
+
+def test_child_sends_failure_when_windivert_open_fails(conn):
+    sent = []
+    conn.send.side_effect = sent.append
+    sess = make(conn, Clock())
+    with (
+        mock.patch.object(s.pydivert, "WinDivert", side_effect=OSError("denied")),
+        pytest.raises(Exception, match="denied"),
+    ):
+        sess.run()
+    assert any(
+        m[0] == s.HOST_FIRST_FAILED and "denied" in m[1]
+        for m in sent
+        if isinstance(m, tuple)
+    )
+    assert (s.HOST_FIRST_STARTED, 60.0) not in sent
+
+
+def test_menu_shows_error_and_returns_on_failure():
+    from guardian.util import i18n
+
+    i = MENU_SRC.index("def launch_host_first_session")
+    body = MENU_SRC[i : MENU_SRC.index("@staticmethod", i)]
+    assert "is_alive=session.process.is_alive" in body
+    j = body.index("except FilterStartFailed")
+    rest = body[j:]
+    assert (
+        rest.index('t("host_first.failed")')
+        < rest.index("return")
+        < rest.index("host_first_countdown")
+    )
+    assert "WinDivert" in i18n.STRINGS["host_first.failed"]["fr"]
+    assert "administrateur" in i18n.STRINGS["host_first.failed"]["fr"]
+    assert "administrator" in i18n.STRINGS["host_first.failed"]["en"]

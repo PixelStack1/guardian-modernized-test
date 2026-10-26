@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import contextlib
+import math
 import time
 from typing import Any
 
-from network.sessions import HOST_FIRST_STARTED, HostFirstSession
+from network.sessions import (
+    HOST_FIRST_FAILED,
+    HOST_FIRST_SECONDS,
+    HOST_FIRST_STARTED,
+    HostFirstSession,
+)
 from util.console import get_original_console_title, set_console_title
 from util.i18n import t
 
@@ -38,16 +44,35 @@ def drain(conn: Any) -> None:
             conn.recv()
 
 
+class FilterStartFailed(Exception):
+    """Le processus de filtrage est mort ou n'a pas pu ouvrir WinDivert."""
+
+
+def valid_duration(value: Any) -> float | None:
+    """Durée annoncée acceptée seulement si finie et dans ]0, HOST_FIRST_SECONDS]."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    d = float(value)
+    if math.isfinite(d) and 0 < d <= HOST_FIRST_SECONDS:
+        return d
+    return None
+
+
 def wait_until_started(
     session: HostFirstSession,
     conn: Any,
     timeout: float = START_TIMEOUT_SECONDS,
     clock: Any = time.monotonic,
+    is_alive: Any = None,
 ) -> bool:
     """Attend le message HOST_FIRST_STARTED du processus de filtrage (au plus ``timeout`` s).
-    Reçu : l'échéance locale est recalée sur la durée annoncée. Sinon : on démarre quand même."""
+    Reçu : l'échéance locale est recalée sur la durée annoncée (si valide). Sinon : on
+    démarre quand même. Lève FilterStartFailed si le processus meurt (``is_alive``) ou
+    signale un échec d'ouverture (HOST_FIRST_FAILED)."""
     deadline = clock() + timeout
     while True:
+        if is_alive is not None and not is_alive():
+            raise FilterStartFailed("process not alive")
         left = deadline - clock()
         if left <= 0:
             break
@@ -57,12 +82,15 @@ def wait_until_started(
             msg = conn.recv()
         except Exception:
             break
+        if isinstance(msg, tuple) and len(msg) == 2 and msg[0] == HOST_FIRST_FAILED:
+            raise FilterStartFailed(str(msg[1]))
         if isinstance(msg, tuple) and len(msg) == 2 and msg[0] == HOST_FIRST_STARTED:
-            try:
-                duration = float(msg[1])
-            except (TypeError, ValueError):
+            duration = valid_duration(msg[1])
+            if duration is None:
                 duration = session.duration
             session.open_at = session.clock() + duration
             return True
+    if is_alive is not None and not is_alive():
+        raise FilterStartFailed("process not alive")
     session.open_at = session.clock() + session.duration
     return False

@@ -15,6 +15,7 @@ Aucune lecture/modification du jeu, aucun paquet émis vers qui que ce soit.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import queue
 import sys
@@ -62,6 +63,8 @@ PERMANENT = 0.0
 Packet = tuple[float, str, int, bool, int]
 # Nombre max d'IP mémorisées pour ne signaler qu'une fois un refus du bouclier auto.
 GUARD_REPORTED_MAX = 1024
+
+logger = logging.getLogger(__name__)
 
 
 def is_blocked(blocked: MutableMapping[str, float], ip: str, now: float) -> bool:
@@ -134,6 +137,7 @@ def read_flag(flag: Any) -> bool:
     try:
         return bool(flag.value)
     except Exception:
+        logger.debug("read_flag: lecture du drapeau impossible", exc_info=True)
         return False
 
 

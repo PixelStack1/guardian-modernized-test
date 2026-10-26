@@ -319,6 +319,8 @@ class SoloSession(AbstractPacketFilter):
 HOST_FIRST_SECONDS = 60
 # Message envoyé par le processus de filtrage quand il est réellement lancé.
 HOST_FIRST_STARTED = "host_first_started"
+# Message envoyé si l'ouverture du handle WinDivert échoue : (HOST_FIRST_FAILED, raison).
+HOST_FIRST_FAILED = "host_first_failed"
 
 
 class HostFirstSession(SoloSession):
@@ -345,9 +347,19 @@ class HostFirstSession(SoloSession):
 
     def run(self) -> None:
         self.open_at = self.clock() + self.duration
-        super().run()
+        self._started = False
+        try:
+            super().run()
+        except Exception as e:
+            if not self._started:
+                # Handle WinDivert non ouvert : on prévient le menu, qui n'affichera
+                # ni « Session ouverte » ni compte à rebours.
+                with contextlib.suppress(Exception):
+                    self.queue.send((HOST_FIRST_FAILED, f"{type(e).__name__}: {e}"))
+            raise
 
     def on_started(self) -> None:
+        self._started = True
         # Filtre réellement actif : l'échéance part de MAINTENANT, et le menu est
         # prévenu par le Pipe existant (durée restante, pas d'instant d'horloge).
         self.open_at = self.clock() + self.duration
