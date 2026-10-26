@@ -127,6 +127,16 @@ def handle_packet(
     return True
 
 
+def read_flag(flag: Any) -> bool:
+    """Lit le drapeau partagé du blocage total ; toute erreur = False (le trafic passe)."""
+    if flag is None:
+        return False
+    try:
+        return bool(flag.value)
+    except Exception:
+        return False
+
+
 def capture_loop(
     blocked: MutableMapping[str, float],
     out: Queue[Packet],
@@ -153,7 +163,7 @@ def capture_loop(
             if now >= next_refresh:
                 local = dict(blocked)
                 local_total = dict(total_blocked) if total_blocked is not None else {}
-                total_on = bool(total_flag.value) if total_flag is not None else False
+                total_on = read_flag(total_flag)
                 next_refresh = now + BLOCKLIST_REFRESH
             handle_packet(w, packet, local, local_total, now, total_on)
             with contextlib.suppress(queue.Full):

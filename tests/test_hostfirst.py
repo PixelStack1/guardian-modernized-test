@@ -222,3 +222,83 @@ def test_filter_process_rearms_its_own_deadline(conn, packet_factory):
     handle = _run_with(iter([join]), sess)
     assert sess.open_at == 5060.0
     assert handle.send.call_count == 0  # toujours en phase 1 : join jeté
+
+
+# -- signal « filtre lancé » ----------------------------------------------------
+
+
+def test_filter_sends_started_after_handle_opened(conn, packet_factory):
+    clock = Clock(1000.0)
+    sess = make(conn, clock)
+    order = []
+    handle = mock.MagicMock()
+    handle.__iter__.return_value = iter([])
+    handle.open.side_effect = lambda *a: order.append("open")
+    conn.send.side_effect = lambda msg: order.append(msg)
+    clock.now = 2000.0
+    with mock.patch.object(s.pydivert, "WinDivert", return_value=handle):
+        sess.run()
+    assert (s.HOST_FIRST_STARTED, 60.0) in order
+    assert order.index("open") < order.index((s.HOST_FIRST_STARTED, 60.0))
+    assert sess.open_at == 2060.0
+
+
+def test_started_signal_failure_does_not_break_filter(conn):
+    conn.send.side_effect = OSError("pipe fermé")
+    sess = make(conn, Clock())
+    sess.on_started()  # ne lève pas
+    assert sess.open_at == 1060.0
+
+
+def test_menu_waits_for_started_then_counts_from_it(conn):
+    from multiprocessing import Pipe
+
+    from guardian.menu.hostfirst import drain, wait_until_started
+
+    parent, child = Pipe()
+    child.send(True)  # ancien signal d'un autre filtre
+    drain(parent)
+    assert not parent.poll(0)
+    clock = Clock(1000.0)
+    sess = make(conn, clock)
+    clock.now = 1003.0  # le filtre a mis 3 s à démarrer
+    child.send(True)  # signal générique ignoré
+    child.send((s.HOST_FIRST_STARTED, 60.0))
+    assert wait_until_started(sess, parent, timeout=2)
+    assert sess.open_at == 1063.0  # compte à rebours complet depuis le vrai lancement
+
+
+def test_menu_starts_anyway_after_timeout(conn):
+    from guardian.menu.hostfirst import START_TIMEOUT_SECONDS, wait_until_started
+
+    assert START_TIMEOUT_SECONDS == 10.0
+
+    class SilentConn:
+        def poll(self, timeout):
+            clock.now += timeout
+            return False
+
+    clock = Clock(1000.0)
+    sess = make(conn, clock)
+    assert not wait_until_started(sess, SilentConn(), timeout=10, clock=clock)
+    assert clock.now >= 1010.0
+    assert sess.open_at == clock.now + 60.0
+
+
+def test_menu_survives_broken_pipe(conn):
+    from guardian.menu.hostfirst import drain, wait_until_started
+
+    class Broken:
+        def poll(self, _t):
+            raise OSError
+
+    sess = make(conn, Clock())
+    drain(Broken())
+    assert not wait_until_started(sess, Broken(), timeout=1)
+
+
+def test_menu_waits_before_countdown():
+    i = MENU_SRC.index("def launch_host_first_session")
+    body = MENU_SRC[i : MENU_SRC.index("@staticmethod", i)]
+    assert body.index("start_latest_filter") < body.index("wait_until_started")
+    assert body.index("wait_until_started") < body.index("host_first_countdown")

@@ -282,3 +282,24 @@ def test_should_drop_false_when_mode_off_even_with_stale_entry():
     assert ls.should_drop(False, ME, FOE, blocked, total, 1.0, total_on=True)
     assert not ls.should_drop(False, ME, FOE, blocked, total, 1.0, total_on=False)
     assert ls.should_drop(True, FOE, ME, blocked, total, 1.0, total_on=False)  # entrant
+
+
+def test_read_flag_fail_safe():
+    class Broken:
+        @property
+        def value(self):
+            raise OSError("mémoire partagée indisponible")
+
+    assert ls.read_flag(None) is False
+    assert ls.read_flag(Broken()) is False
+    f = Flag()
+    assert ls.read_flag(f) is False
+    f.value = 1
+    assert ls.read_flag(f) is True
+
+
+def test_capture_loop_uses_read_flag():
+    import inspect
+
+    src = inspect.getsource(ls.capture_loop)
+    assert "read_flag(total_flag)" in src and "total_flag.value" not in src

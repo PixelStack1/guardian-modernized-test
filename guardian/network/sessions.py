@@ -250,6 +250,10 @@ class AbstractPacketFilter(ABC):
     def is_packet_allowed(self, packet: pydivert.Packet) -> bool:
         pass
 
+    def on_started(self) -> None:
+        """Appelé dans le processus de filtrage, une fois le handle WinDivert ouvert."""
+        return None
+
     def finished(self) -> bool:
         """True = le filtre a terminé son travail : la boucle s'arrête et le handle
         WinDivert est fermé (le trafic redevient normal, sans Guardian)."""
@@ -261,6 +265,7 @@ class AbstractPacketFilter(ABC):
             with open_windivert(
                 priority=self.priority, filter_=packet_filter(self.extra_ports)
             ) as w:
+                self.on_started()
                 for packet in w:
                     decision = self.is_packet_allowed(packet)
                     if decision:
@@ -312,6 +317,8 @@ class SoloSession(AbstractPacketFilter):
 # « Session publique en hôte au départ » : durée FIXE de la phase solo (secondes).
 # Volontairement non réglable (ni option, ni touche).
 HOST_FIRST_SECONDS = 60
+# Message envoyé par le processus de filtrage quand il est réellement lancé.
+HOST_FIRST_STARTED = "host_first_started"
 
 
 class HostFirstSession(SoloSession):
@@ -339,6 +346,13 @@ class HostFirstSession(SoloSession):
     def run(self) -> None:
         self.open_at = self.clock() + self.duration
         super().run()
+
+    def on_started(self) -> None:
+        # Filtre réellement actif : l'échéance part de MAINTENANT, et le menu est
+        # prévenu par le Pipe existant (durée restante, pas d'instant d'horloge).
+        self.open_at = self.clock() + self.duration
+        with contextlib.suppress(Exception):
+            self.queue.send((HOST_FIRST_STARTED, self.duration))
 
     def is_open(self) -> bool:
         return self.clock() >= self.open_at

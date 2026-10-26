@@ -14,7 +14,7 @@ from tqdm import trange
 from config.configdata import ConfigData
 from config.globallist import Blacklist, Whitelist
 from dispatcher.context import Context
-from menu.hostfirst import host_first_countdown
+from menu.hostfirst import drain, host_first_countdown, wait_until_started
 from menu.lists import Lists
 from menu.livesession import run_live_session
 from network.sessions import (
@@ -139,8 +139,11 @@ class Menu:
         if not (answer and answer == Prompts.CONFIRM_SESSION_ANSWER.YES):
             return
         session = HostFirstSession(Menu.context.priority, connection=Menu.child_conn)
+        drain(Menu.parent_conn)  # ignorer les anciens signaux des autres filtres
         Menu.context.add_filter(session)
         Menu.context.start_latest_filter()
+        # Le compte à rebours ne démarre qu'une fois le filtre réellement lancé (max 10 s).
+        wait_until_started(session, Menu.parent_conn)
         # Ctrl+C n'interrompt que l'affichage : la réouverture reste automatique.
         with contextlib.suppress(KeyboardInterrupt):
             host_first_countdown(session)
