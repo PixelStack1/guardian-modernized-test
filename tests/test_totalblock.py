@@ -238,3 +238,47 @@ def test_ripe_timeout_falls_back(monkeypatch, tmp_path, exc):
     assert dbl.get_announced_prefixes(1, {"203.0.113.0/24"}, cache_dir=tmp_path) == {
         "203.0.113.0/24"
     }
+
+
+class Flag:
+    def __init__(self):
+        self.value = 0
+
+
+def test_turning_off_clears_all_outbound_cuts_inbound_unchanged():
+    flag = Flag()
+    clock = [1000.0]
+    c = ls.LiveSessionController(
+        {},
+        FakeList(),
+        auto_block=True,
+        clock=lambda: clock[0],
+        total_block=True,
+        total_flag=flag,
+    )
+    assert flag.value == 1
+    c.block(FOE)
+    assert c.auto_block_if_needed(PeerState(OTHER, 0, 0, level=Level.SUSPECT))
+    assert set(c.total_blocked) == {FOE, OTHER}
+    c.toggle_total_block()  # T -> OFF
+    assert not c.total_block and flag.value == 0
+    assert c.total_blocked == {}
+    assert "2 coupure(s)" in c.events[-1]
+    assert c.blocked[FOE] == ls.PERMANENT  # B : permanent
+    assert c.blocked[OTHER] == 1000.0 + ls.AUTO_BLOCK_SECONDS  # auto : 7 jours
+    w = FakeHandle()
+    out_foe = FakePacket(ME, FOE, inbound=False)
+    in_foe = FakePacket(FOE, ME, inbound=True)
+    assert ls.handle_packet(w, out_foe, c.blocked, c.total_blocked, 1001.0, flag.value)
+    assert not ls.handle_packet(
+        w, in_foe, c.blocked, c.total_blocked, 1001.0, flag.value
+    )
+    c.toggle_total_block()  # ON de nouveau : pas de coupure rétroactive
+    assert c.total_block and flag.value == 1 and c.total_blocked == {}
+
+
+def test_should_drop_false_when_mode_off_even_with_stale_entry():
+    blocked, total = {FOE: ls.PERMANENT}, {FOE: 9e9}
+    assert ls.should_drop(False, ME, FOE, blocked, total, 1.0, total_on=True)
+    assert not ls.should_drop(False, ME, FOE, blocked, total, 1.0, total_on=False)
+    assert ls.should_drop(True, FOE, ME, blocked, total, 1.0, total_on=False)  # entrant

@@ -325,13 +325,20 @@ class HostFirstSession(SoloSession):
         connection: PipeConnection,
         session_info: SessionInfo | None = None,
         debug: bool = False,
-        open_at: float | None = None,
-        clock: Callable[[], float] = time.time,
+        clock: Callable[[], float] = time.monotonic,
     ):
         super().__init__(priority, connection, session_info, debug)
+        # Horloge MONOTONE (insensible aux changements d'heure du système).
         self.clock = clock
-        # Horodatage (epoch, partagé entre processus) de la réouverture.
-        self.open_at = clock() + HOST_FIRST_SECONDS if open_at is None else open_at
+        # On transmet une DURÉE, pas un instant : le processus de filtrage réarme son
+        # propre échéancier au démarrage (run), sans dépendre d'une horloge partagée
+        # entre processus. Le compte à rebours de l'affichage utilise celui-ci.
+        self.duration = float(HOST_FIRST_SECONDS)
+        self.open_at = clock() + self.duration
+
+    def run(self) -> None:
+        self.open_at = self.clock() + self.duration
+        super().run()
 
     def is_open(self) -> bool:
         return self.clock() >= self.open_at

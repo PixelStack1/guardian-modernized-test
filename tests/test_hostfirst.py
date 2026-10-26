@@ -156,7 +156,16 @@ def test_countdown_then_session_open_message(conn):
     def fake_sleep(sec):
         clock.now += sec
 
-    host_first_countdown(sess, sleep=fake_sleep, out=lambda *a, **k: lines.append(a[0]))
+    titles = []
+    host_first_countdown(
+        sess,
+        sleep=fake_sleep,
+        out=lambda *a, **k: lines.append(a[0]),
+        set_title=titles.append,
+    )
+    from guardian.util.console import get_original_console_title
+
+    assert titles == [get_original_console_title()]  # titre d'origine remis à la fin
     assert any("60 s" in ln for ln in lines) and any("1 s" in ln for ln in lines)
     assert lines[-1].startswith("Session ouverte")
     assert clock.now >= 1060.0
@@ -187,3 +196,29 @@ def test_not_active_unless_chosen_and_no_reopen_key():
         MENU_SRC.count("HostFirstSession(") == 1
     )  # créé seulement par l'entrée de menu
     assert "open_at=" not in MENU_SRC  # pas de réouverture anticipée
+
+
+def test_uses_monotonic_clock_by_default(conn):
+    import inspect
+    import time
+
+    assert (
+        inspect.signature(s.HostFirstSession).parameters["clock"].default
+        is time.monotonic
+    )
+    sess = s.HostFirstSession(1, conn)
+    assert sess.duration == 60.0
+    assert 59.0 < sess.remaining() <= 60.0
+
+
+def test_filter_process_rearms_its_own_deadline(conn, packet_factory):
+    """On transmet une durée : le processus de filtrage réarme open_at au démarrage."""
+    clock = Clock(1000.0)
+    sess = make(conn, clock)
+    clock.now = (
+        5000.0  # autre origine d'horloge (ex. autre processus) / démarrage tardif
+    )
+    join = packet_factory(src=STRANGER, payload=b"\1" * 300)
+    handle = _run_with(iter([join]), sess)
+    assert sess.open_at == 5060.0
+    assert handle.send.call_count == 0  # toujours en phase 1 : join jeté

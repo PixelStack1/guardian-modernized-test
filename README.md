@@ -222,7 +222,8 @@ pas l'hôte** (l'hôte ne change que s'il quitte la session).
   défaut**. Quand il est actif et qu'une IP est bloquée (bouclier auto rouge ou `B`), Guardian jette
   **aussi les paquets sortants** vers cette IP précise pendant **10 min** (`TOTAL_BLOCK_SECONDS`,
   en mémoire, jamais enregistré) ; ensuite seul le blocage entrant habituel continue (7 jours pour
-  l'auto, permanent pour `B`). `D` lève aussi la coupure sortante. Uniquement du rejet : aucun
+  l'auto, permanent pour `B`). `D` lève aussi la coupure sortante. Repasser `T` à OFF lève **immédiatement toutes** les coupures sortantes en cours (le
+  blocage entrant, lui, ne change pas : 7 jours pour l'auto, permanent pour `B`). Uniquement du rejet : aucun
   paquet n'est fabriqué, modifié ni envoyé au joueur ; en cas d'erreur, le paquet passe. Aucun
   trafic supplémentaire n'est capturé : le filtre reste le filtre strict (UDP vers 6672), tout
   le reste est réinjecté immédiatement. Mêmes garde-fous que le bouclier auto (jamais liste blanche,

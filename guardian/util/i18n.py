@@ -331,6 +331,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "fr": "Blocage total : {ip} protégée (liste blanche / Rockstar / Azure), envoi non coupé",
         "en": "Total block: {ip} is protected (whitelist / Rockstar / Azure), sending not cut",
     },
+    "live.ev.total_cleared": {
+        "fr": "Blocage total désactivé : {n} coupure(s) sortante(s) levée(s) (le blocage entrant continue)",
+        "en": "Total block off: {n} outbound cut(s) lifted (inbound block continues)",
+    },
     "live.ev.total_expired": {
         "fr": "Blocage total de {ip} terminé (le blocage entrant continue)",
         "en": "Total block of {ip} ended (inbound block continues)",

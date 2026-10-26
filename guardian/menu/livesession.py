@@ -21,7 +21,7 @@ import sys
 import time
 from collections.abc import Callable, MutableMapping
 from datetime import datetime
-from multiprocessing import Manager, Process, Queue
+from multiprocessing import Manager, Process, Queue, Value
 from typing import Any
 
 from colorama import Fore, Style
@@ -79,6 +79,7 @@ def should_drop(
     blocked: MutableMapping[str, float],
     total: MutableMapping[str, float],
     now: float,
+    total_on: bool = True,
 ) -> bool:
     """Décision par paquet (aucune modification, aucune création de paquet).
 
@@ -88,6 +89,8 @@ def should_drop(
     try:
         if inbound:
             return is_blocked(blocked, src, now)
+        if not total_on:  # mode blocage total OFF : aucun sortant n'est jeté
+            return False
         expiry = total.get(dst)
         return expiry is not None and now < expiry and is_blocked(blocked, dst, now)
     except Exception:
@@ -100,6 +103,7 @@ def handle_packet(
     blocked: MutableMapping[str, float],
     total: MutableMapping[str, float],
     now: float,
+    total_on: bool = True,
 ) -> bool:
     """Réinjecte le paquet ORIGINAL tel quel (``w.send(packet)``) ou le jette.
     Renvoie True si envoyé. Jamais de paquet fabriqué ni modifié."""
@@ -107,7 +111,13 @@ def handle_packet(
         inbound = bool(packet.is_inbound)
         outbound = bool(packet.is_outbound)
         drop = (inbound or outbound) and should_drop(
-            inbound, packet.ip.src_addr, packet.ip.dst_addr, blocked, total, now
+            inbound,
+            packet.ip.src_addr,
+            packet.ip.dst_addr,
+            blocked,
+            total,
+            now,
+            total_on,
         )
     except Exception:
         drop = False
@@ -122,6 +132,7 @@ def capture_loop(
     out: Queue[Packet],
     extra_ports: bool,
     total_blocked: MutableMapping[str, float] | None = None,
+    total_flag: Any = None,
 ) -> None:  # pragma: no cover - nécessite Windows + WinDivert
     from network.sessions import open_windivert, packet_filter
 
@@ -133,6 +144,7 @@ def capture_loop(
         # évite un aller-retour inter-processus par paquet (latence en jeu).
         local: dict[str, float] = dict(blocked)
         local_total: dict[str, float] = {}
+        total_on = False
         next_refresh = 0.0
         for packet in w:
             inbound = bool(packet.is_inbound)
@@ -141,8 +153,9 @@ def capture_loop(
             if now >= next_refresh:
                 local = dict(blocked)
                 local_total = dict(total_blocked) if total_blocked is not None else {}
+                total_on = bool(total_flag.value) if total_flag is not None else False
                 next_refresh = now + BLOCKLIST_REFRESH
-            handle_packet(w, packet, local, local_total, now)
+            handle_packet(w, packet, local, local_total, now, total_on)
             with contextlib.suppress(queue.Full):
                 port = packet.src_port if inbound else packet.dst_port
                 out.put_nowait((now, ip, len(packet.payload), inbound, int(port or 0)))
@@ -192,6 +205,7 @@ class LiveSessionController:
         auto_entries: dict[str, float] | None = None,
         total_block: bool = TOTAL_BLOCK_DEFAULT,
         total_blocked: MutableMapping[str, float] | None = None,
+        total_flag: Any = None,
     ) -> None:
         self.blocked = blocked
         # reporter(ip, type « auto »/« manual », pseudo) : rapport d'incident à chaque blocage.
@@ -209,6 +223,8 @@ class LiveSessionController:
         self.total_blocked: MutableMapping[str, float] = (
             total_blocked if total_blocked is not None else {}
         )
+        # Drapeau partagé avec le processus de capture (multiprocessing.Value) ou None.
+        self.total_flag = total_flag
         self.total_block = total_block and auto_block_available
         self.clock = clock
         self.pseudos: dict[str, str] = {}
@@ -241,6 +257,24 @@ class LiveSessionController:
             return
         self.total_blocked[ip] = self.clock() + TOTAL_BLOCK_SECONDS
         self.events.append(t("live.ev.total", ip=ip, minutes=TOTAL_BLOCK_SECONDS // 60))
+
+    @property
+    def total_block(self) -> bool:
+        return self._total_block
+
+    @total_block.setter
+    def total_block(self, on: bool) -> None:
+        self._total_block = bool(on)
+        if self.total_flag is not None:
+            with contextlib.suppress(Exception):
+                self.total_flag.value = self._total_block
+        if not self._total_block:
+            # OFF : toutes les coupures sortantes en cours sont levées tout de suite.
+            # Le blocage ENTRANT ne change pas (7 jours auto, permanent pour B).
+            cleared = len(self.total_blocked)
+            self.total_blocked.clear()
+            if cleared and hasattr(self, "events"):
+                self.events.append(t("live.ev.total_cleared", n=cleared))
 
     def toggle_total_block(self) -> None:
         self.total_block = self.auto_block_available and not self.total_block
@@ -447,6 +481,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
     manager = Manager()
     blocked: MutableMapping[str, float] = manager.dict()
     total_blocked: MutableMapping[str, float] = manager.dict()
+    total_flag = Value("b", 0)
     packets: Queue[Packet] = Queue(QUEUE_MAX)
     from config.globallist import Whitelist
     from menu.menu import Menu  # import tardif : menu.py importe ce module
@@ -475,6 +510,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
         auto_store=saver,
         total_block=bool(config.data.get(TOTAL_BLOCK_KEY, TOTAL_BLOCK_DEFAULT)),
         total_blocked=total_blocked,
+        total_flag=total_flag,
         # Lecture une seule fois, avant le démarrage de la capture.
         auto_entries=autoblock.load(time.time(), guard, max_seconds=AUTO_BLOCK_SECONDS)
         if ranges_ok
@@ -485,7 +521,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
     recorder = MetadataRecorder()
     proc = Process(
         target=capture_loop,
-        args=(blocked, packets, extra_ports_enabled(), total_blocked),
+        args=(blocked, packets, extra_ports_enabled(), total_blocked, total_flag),
         daemon=True,
     )
     proc.start()
