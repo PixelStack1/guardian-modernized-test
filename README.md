@@ -114,3 +114,7 @@ GTA Online on PC was too crazy with modders wreaking havoc and constantly spammi
 
 - [**> Open an issue**](https://github.com/TheMythologist/guardian/issues/new)
 - [**> Join Speyedr's Discord server**](https://discord.gg/6FzKCh4j4v)
+
+## Notice
+
+Modified version of Guardian by TheMythologist (https://github.com/TheMythologist/guardian), licensed under the GNU LGPL-3.0 (see LICENSE). Modifications (2026): see MODERNIZATION_NOTES.md.
