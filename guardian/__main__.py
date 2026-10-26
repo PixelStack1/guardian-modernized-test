@@ -13,7 +13,7 @@ from util.integrity import IntegrityError, secure_windivert
 from util.paths import data_file
 from util.printer import print_white
 
-__version__ = "3.6.0.dev0"
+__version__ = "3.6.0"
 
 logger = logging.getLogger(__name__)
 logger.propagate = False
