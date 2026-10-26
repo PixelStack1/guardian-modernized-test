@@ -45,6 +45,7 @@ The most important requirement for securing a session with Guardian is that you 
 
 - *Whitelisted Session*
   - Only IP addresses in your `Whitelist` will be allowed to connect to you. If you are the host of a session, anyone not in your whitelist will likely lose connection to the session. If you are not the host of your current session and other players in your current session are not on your whitelist (whether already in the session or joining sometime later), you will lose connection to everyone else when you enable this type of session. Ths is because your client will not be able to communicate with these players and you do not have host privileges to kick them out of the session.
+  - Volontaire et repris du Guardian d'origine 3.5.0 : en mode Liste blanche, Guardian lit seulement quelques octets d'en-tête des paquets UDP chiffrés pour reconnaître les services Rockstar ; rien n'est enregistré ni affiché, et le jeu n'est pas lu. *(Intentional, from the original Guardian 3.5.0: in Whitelisted mode Guardian only reads a few header bytes of encrypted UDP packets to recognise Rockstar services; nothing is logged or shown, and the game is not read.)*
 
 - *Blacklisted Session*
   - IP addresses in your `Blacklist` will not be allowed to connect to you. If a connection is routed through R\* servers, that connection will also be blocked as a security measure. This mode is *not recommended* as GTA Online has custom routing if only a handful of IP addresses are blocked.

@@ -178,6 +178,10 @@ KNOWN_SIZES = HEARTBEAT_SIZES.union(MATCHMAKING_SIZES)
 # in case they're useful later on.
 
 
+# VOLONTAIRE — repris tel quel du Guardian d'origine (3.5.0). En mode Liste blanche, cette
+# fonction lit seulement quelques octets d'en-tête de paquets UDP chiffrés pour reconnaître
+# les services Rockstar et les laisser passer. Elle n'enregistre rien, n'affiche rien et ne
+# lit pas le jeu (ni sa mémoire, ni ses fichiers, ni le contenu déchiffré des paquets).
 def is_whitelist_service_packet(payload: bytes) -> bool:
     """
     Heuristic (from upstream 3.5.0) recognising R* service / DTLS-handshake style packets by
