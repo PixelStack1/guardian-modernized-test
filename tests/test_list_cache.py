@@ -73,3 +73,48 @@ def test_azure_change_over_30_percent_keeps_backup(tmp_path, monkeypatch):
     assert json.loads(backup.read_bytes())["values"][0]["properties"][
         "addressPrefixes"
     ] == sorted(BASE)
+
+
+def _big_change():
+    return {f"11.{i}.0.0/16" for i in range(20)}
+
+
+def test_big_change_accepted_after_7_days(tmp_path):
+    db.accept_list("t", BASE, set(), tmp_path, now=1000.0)
+    assert (
+        db.accept_list("t", _big_change(), set(), tmp_path, now=1000.0 + 6 * 86400)
+        == BASE
+    )
+    assert (
+        db.accept_list("t", _big_change(), set(), tmp_path, now=1000.0 + 8 * 86400)
+        == _big_change()
+    )
+
+
+def test_big_change_accepted_after_3_rejections(tmp_path):
+    db.accept_list("t", BASE, set(), tmp_path, now=1000.0)
+    for _ in range(3):
+        assert db.accept_list("t", _big_change(), set(), tmp_path, now=1001.0) == BASE
+    assert (
+        db.accept_list("t", _big_change(), set(), tmp_path, now=1001.0) == _big_change()
+    )
+    # counter reset after acceptance
+    assert json.loads((tmp_path / "cache_t.json").read_text())["rejections"] == 0
+
+
+def test_rejection_counter_resets_on_valid_list(tmp_path):
+    db.accept_list("t", BASE, set(), tmp_path, now=1000.0)
+    db.accept_list("t", _big_change(), set(), tmp_path, now=1001.0)
+    small = (BASE - {"10.0.0.0/16"}) | {"11.0.0.0/16"}
+    assert db.accept_list("t", small, set(), tmp_path, now=1002.0) == small
+    assert json.loads((tmp_path / "cache_t.json").read_text())["rejections"] == 0
+
+
+def test_malformed_never_accepted_even_when_stale(tmp_path):
+    db.accept_list("t", BASE, set(), tmp_path, now=1000.0)
+    for _ in range(5):
+        assert (
+            db.accept_list("t", {"0.0.0.0/0"}, set(), tmp_path, now=1000.0 + 30 * 86400)
+            == BASE
+        )
+    assert db.accept_list("t", set(), set(), tmp_path, now=1000.0 + 30 * 86400) == BASE

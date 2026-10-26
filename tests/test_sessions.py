@@ -288,3 +288,10 @@ def test_constructor_failure_raises_filter_open_error():
         pytest.raises(s.FilterOpenError, match="denied"),
     ):
         s.probe_filter(False)
+
+
+@pytest.mark.parametrize("port", sorted(s.EXTRA_PORTS))
+def test_extra_ports_outbound_not_extra(packet_factory, port):
+    assert s.is_extra_port(packet_factory(dport=port, inbound=True))
+    assert not s.is_extra_port(packet_factory(dport=port, inbound=False))
+    assert not s.is_extra_port(packet_factory(dport=6672, inbound=True))

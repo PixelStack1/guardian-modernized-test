@@ -169,3 +169,4 @@ data.json
 db.json
 history.log
 debugger.log
+cache_*.json

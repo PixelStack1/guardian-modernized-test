@@ -33,3 +33,12 @@ D. accept_list(): cache_<name>.json, rejects empty/malformed/>30% change; Azure 
 E. PACKET_FILTER = UDP 6672 + 61455-61458 exactly; open_windivert()/probe_filter() -> FilterOpenError -> clean exit 4.
 F. .github/dependabot.yml (pip + github-actions).
 G. tests/test_fuzz.py (hypothesis).
+
+## Second audit pass (2026-10-26)
+1. cache_ripe_AS202021.json untracked; cache_*.json ignored.
+2. History IP scan: only upstream example IPs (sessioninfo.py table, 2021, upstream author) + doc/test/version strings.
+3. build.yml: SHA256SUMS; tag-only `attest` job with job-level id-token/attestations write; continue-on-error until public.
+4. Extra ports 61455-61458: inbound only (filter + is_extra_port).
+5. paths.py: no CWD migration.
+6. 30% guard lifted when cache > 7 days old or after 3 consecutive rejections (Azure too, seeded from db.json).
+7. `ref: ${{ github.head_ref }}` removed; dependabot cooldown.

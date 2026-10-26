@@ -174,6 +174,7 @@ pk = sniff(
     s.PACKET_FILTER + " and ip.DstAddr == 127.0.0.1",
     lambda: [udp_send("127.0.0.1", p, 64) for p in probe_ports],
     5,
+    timeout=4,
 )
 results["strict_filter_ports"] = sorted({p.dst_port for p in pk})
 pk6672 = sniff(
@@ -194,8 +195,27 @@ try:
 except s.FilterOpenError as e:
     results["bad_filter_clean_error"] = True
     results["bad_filter_message"] = str(e)
+# Real WinDivert filter evaluator (WinDivertHelperEvalFilter) on synthetic inbound/outbound packets
+sys.path.insert(0, "tests")
+from conftest import make_udp_packet  # noqa: E402
+
+eval_in, eval_out = [], []
+for p in probe_ports:
+    if make_udp_packet(dport=p, payload=b"x" * 20, inbound=True).matches(
+        s.PACKET_FILTER
+    ):
+        eval_in.append(p)
+    if make_udp_packet(dport=p, payload=b"x" * 20, inbound=False).matches(
+        s.PACKET_FILTER
+    ):
+        eval_out.append(p)
+results["evalfilter_inbound_ports"] = eval_in
+results["evalfilter_outbound_ports"] = eval_out
 results["strict_filter_ok"] = (
-    results["strict_filter_ports"] == sorted(s.ALL_PORTS)
+    # loopback traffic is outbound: extra ports must NOT be captured
+    results["strict_filter_ports"] == [6672]
+    and eval_in == sorted(s.ALL_PORTS)
+    and eval_out == [6672]
     and results["filter_6672_only_ports"] == [6672]
     and results["probe_filter_ok"] is True
     and results["bad_filter_clean_error"] is True
