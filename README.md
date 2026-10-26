@@ -206,3 +206,18 @@ dans `data.json`. Traductions : `guardian/util/i18n.py`.
 Base hors ligne (aucun appel réseau) : [sapics/ip-location-db](https://github.com/sapics/ip-location-db),
 jeu `geo-whois-asn-country` IPv4, licence **CC0-1.0** (domaine public). Fichier compact
 `guardian/util/geoip_ipv4.bin.gz` (~1 Mo), régénérable avec `tools/build_geoip.py`. Pays approximatif.
+
+### Rapports d'incident (automatiques)
+
+À chaque blocage depuis la vue « Session en direct » (bouclier auto rouge **ou** touche B), Guardian écrit
+immédiatement deux fichiers dans `%LOCALAPPDATA%\Guardian\rapports\` (`AAAAMMJJ-HHMMSS_<ip>.txt` et `.json`) :
+identifiant court, début/fin avec fuseau, durée, version, IP source, ports observés, pays (pas d'ASN : aucune
+base hors ligne fournie), type et niveau d'anomalie, paquets/s moyen et pic, totaux, taille max, référence
+apprise vs observé, extrait de la fenêtre glissante, et un champ pseudo facultatif. Le .txt commence par un
+en-tête prêt à coller pour Rockstar et rappelle qu'**une IP n'identifie pas un compte et ne garantit aucun ban**.
+Un blocage manuel sans anomalie produit un rapport allégé. Les 200 derniers rapports sont conservés.
+Écriture dans un thread dédié, hors capture ; aucune erreur disque ne peut interrompre la vue ; aucun appel réseau,
+uniquement des métadonnées (jamais le contenu des paquets).
+
+Si les plages Rockstar/Azure (`dynamic_blacklist`) n'ont pas pu être chargées, le bouclier auto reste désactivé
+et la vue l'indique.

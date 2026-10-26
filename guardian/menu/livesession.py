@@ -51,7 +51,10 @@ QUEUE_MAX = 100_000
 # Valeur d'expiration pour un blocage permanent (Blacklist).
 PERMANENT = 0.0
 
-Packet = tuple[float, str, int, bool]  # (horodatage, ip du pair, taille, entrant)
+# (horodatage, ip du pair, taille, entrant, port du pair)
+Packet = tuple[float, str, int, bool, int]
+# Nombre max d'IP mémorisées pour ne signaler qu'une fois un refus du bouclier auto.
+GUARD_REPORTED_MAX = 1024
 
 
 def is_blocked(blocked: MutableMapping[str, float], ip: str, now: float) -> bool:
@@ -87,7 +90,8 @@ def capture_loop(
             if not (inbound and is_blocked(local, ip, now)):
                 w.send(packet)
             with contextlib.suppress(queue.Full):
-                out.put_nowait((now, ip, len(packet.payload), inbound))
+                port = packet.src_port if inbound else packet.dst_port
+                out.put_nowait((now, ip, len(packet.payload), inbound, int(port or 0)))
 
 
 def blacklist_label(pseudo: str, when: datetime) -> str:
@@ -128,8 +132,15 @@ class LiveSessionController:
         auto_block: bool = AUTO_BLOCK_DEFAULT,
         clock: Callable[[], float] = time.time,
         auto_block_guard: Callable[[str], bool] | None = None,
+        reporter: Callable[[str, str, str], None] | None = None,
+        auto_block_available: bool = True,
     ) -> None:
         self.blocked = blocked
+        # reporter(ip, type « auto »/« manual », pseudo) : rapport d'incident à chaque blocage.
+        self.reporter = reporter
+        # Faux si les plages Rockstar/Azure sont inconnues : bouclier auto interdit.
+        self.auto_block_available = auto_block_available
+        auto_block = auto_block and auto_block_available
         # Concerne UNIQUEMENT le blocage automatique ; le blocage manuel (B) peut
         # bloquer n'importe quelle IP choisie par l'utilisateur.
         self.auto_block_guard = auto_block_guard or (lambda _ip: False)
@@ -151,14 +162,31 @@ class LiveSessionController:
         self.blacklist.add(ip, blacklist_label(pseudo, datetime.now()))
         self.blacklist.save()
         self.events.append(t("live.ev.blocked", ip=ip))
+        self._report(ip, "manual", pseudo)
+
+    def _report(self, ip: str, kind: str, pseudo: str) -> None:
+        if self.reporter is None:
+            return
+        # Un rapport ne doit jamais empêcher un blocage.
+        with contextlib.suppress(Exception):
+            self.reporter(ip, kind, pseudo)
+
+    def toggle_auto_block(self) -> None:
+        self.auto_block = self.auto_block_available and not self.auto_block
 
     def auto_block_if_needed(self, peer: PeerState) -> bool:
-        if not self.auto_block or peer.level < Level.SUSPECT:
+        if (
+            not self.auto_block
+            or not self.auto_block_available
+            or peer.level < Level.SUSPECT
+        ):
             return False
         if peer.ip in self.blocked:
             return False
         if self.auto_block_guard(peer.ip):
             if peer.ip not in self._guard_reported:
+                if len(self._guard_reported) >= GUARD_REPORTED_MAX:
+                    self._guard_reported.clear()
                 self._guard_reported.add(peer.ip)
                 self.events.append(t("live.ev.auto_skipped", ip=peer.ip))
             return False
@@ -172,6 +200,7 @@ class LiveSessionController:
                 minutes=AUTO_BLOCK_SECONDS // 60,
             )
         )
+        self._report(peer.ip, "auto", self.pseudos.get(peer.ip, ""))
         return True
 
     def unblock(self, ip: str, remove_from_blacklist: bool = True) -> None:
@@ -219,6 +248,11 @@ def render(
             auto=t("live.on") if ctrl.auto_block else t("live.off"),
             hint="" if ctrl.auto_block else t("live.auto_hint"),
             rec=recording,
+        ),
+        *(
+            []
+            if ctrl.auto_block_available
+            else [Fore.LIGHTRED_EX + t("live.no_ranges") + Style.RESET_ALL]
         ),
         "",
         t(
@@ -280,6 +314,16 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
     packets: Queue[Packet] = Queue(QUEUE_MAX)
     from config.globallist import Whitelist
     from menu.menu import Menu  # import tardif : menu.py importe ce module
+    from network.incident import ReportWriter, build_report
+
+    monitor = SessionMonitor()
+    writer = ReportWriter()
+
+    def reporter(ip: str, kind: str, pseudo: str) -> None:
+        # Construit ici (données de anomaly.py), écrit dans le thread du ReportWriter.
+        writer.submit(
+            build_report(monitor.peers.get(ip), ip, kind, time.time(), pseudo)
+        )
 
     ctrl = LiveSessionController(
         blocked,
@@ -288,8 +332,9 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
         auto_block_guard=make_auto_block_guard(
             set(Whitelist().ips), Menu.dynamic_blacklist
         ),
+        reporter=reporter,
+        auto_block_available=bool(Menu.dynamic_blacklist),
     )
-    monitor = SessionMonitor()
     recorder = MetadataRecorder()
     proc = Process(
         target=capture_loop, args=(blocked, packets, extra_ports_enabled()), daemon=True
@@ -302,10 +347,10 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
             peers: list[PeerState] = []
             while True:
                 try:
-                    ts, ip, size, inbound = packets.get(timeout=0.02)
+                    ts, ip, size, inbound, port = packets.get(timeout=0.02)
                     recorder.write(ts, ip, size, inbound)
                     if inbound:
-                        monitor.add_packet(ip, size, ts)
+                        monitor.add_packet(ip, size, ts, port)
                 except queue.Empty:
                     pass
                 if time.monotonic() >= next_eval:
@@ -351,7 +396,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
                 if answer.isdigit() and 1 <= int(answer) <= len(ips):
                     ctrl.unblock(ips[int(answer) - 1])
             elif key == "a":
-                ctrl.auto_block = not ctrl.auto_block
+                ctrl.toggle_auto_block()
             elif key == "e":
                 if recorder.active:
                     recorder.stop()
@@ -361,6 +406,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
         pass
     finally:
         recorder.stop()
+        writer.close()
         proc.terminate()
         proc.join(timeout=5)
         manager.shutdown()

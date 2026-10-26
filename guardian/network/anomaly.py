@@ -65,6 +65,8 @@ CALM_SECONDS = 10.0
 # sources usurpées arrive. Au-delà, le pair le plus ancien (inactif) est oublié,
 # et si tous sont actifs, les nouvelles IP sont ignorées par la vue.
 MAX_PEERS = 512
+# Nombre maximal de ports sources mémorisés par pair (rapport d'incident).
+MAX_PORTS_PER_PEER = 16
 
 # Un pair est « connecté » s'il a envoyé un paquet dans ce délai (cf. ConnectionStats).
 CONNECTED_SECONDS = 5.0
@@ -111,6 +113,11 @@ class SlidingWindow:
         while self._items and self._items[0][0] <= limit:
             self._bytes -= self._items.popleft()[1]
 
+    def snapshot(self, limit: int = 20) -> list[tuple[float, int]]:
+        """Derniers (horodatage, taille) de la fenêtre (extrait pour les rapports)."""
+        items = list(self._items)
+        return items[-limit:] if limit > 0 else []
+
     def stats(self, now: float) -> WindowStats:
         self.expire(now)
         count = len(self._items)
@@ -142,6 +149,11 @@ class PeerState:
     alert: str = ""
     # Clé de traduction de la cause principale (« reason.burst », ...).
     reason_key: str = ""
+    # Totaux et pic, pour les rapports d'incident.
+    total_packets: int = 0
+    total_bytes: int = 0
+    peak_pps: float = 0.0
+    ports: set[int] = field(default_factory=set)
 
     def learning(self, now: float) -> bool:
         return now - self.first_seen < BASELINE_SECONDS
@@ -154,7 +166,9 @@ class SessionMonitor:
         self.peers: dict[str, PeerState] = {}
 
     # -- alimentation ----------------------------------------------------
-    def add_packet(self, ip: str, size: int, ts: float) -> None:
+    def add_packet(
+        self, ip: str, size: int, ts: float, port: int | None = None
+    ) -> None:
         """Paquet ENTRANT reçu de ``ip`` (taille de la charge utile en octets)."""
         size = max(0, int(size))
         peer = self.peers.get(ip)
@@ -164,6 +178,10 @@ class SessionMonitor:
             peer = PeerState(ip=ip, first_seen=ts, last_seen=ts)
             self.peers[ip] = peer
         peer.last_seen = max(peer.last_seen, ts)
+        peer.total_packets += 1
+        peer.total_bytes += size
+        if port is not None and len(peer.ports) < MAX_PORTS_PER_PEER:
+            peer.ports.add(int(port))
         peer.window.add(ts, size)
         peer.max_size_ever = max(peer.max_size_ever, size)
         if peer.learning(ts):
@@ -238,6 +256,7 @@ class SessionMonitor:
         n_others = len(peers) - 1
         for peer in peers:
             s = stats[peer.ip]
+            peer.peak_pps = max(peer.peak_pps, s.pps)
             reasons: list[str] = []
             keys: list[str] = []
             severe = False

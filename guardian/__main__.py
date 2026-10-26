@@ -13,8 +13,7 @@ from util.i18n import t
 from util.integrity import IntegrityError, secure_windivert
 from util.paths import data_file
 from util.printer import print_white
-
-__version__ = "3.6.0"
+from util.version import __version__
 
 logger = logging.getLogger(__name__)
 logger.propagate = False
