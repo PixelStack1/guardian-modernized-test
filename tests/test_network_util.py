@@ -167,5 +167,5 @@ def test_data_dir_falls_back_to_home(tmp_path, monkeypatch):
     from guardian.util import paths
 
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(paths.Path, "home", classmethod(lambda cls: tmp_path))
     assert paths.data_dir() == tmp_path / "Guardian"
