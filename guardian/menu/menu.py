@@ -92,7 +92,7 @@ class Menu:
     def launch_whitelisted_session() -> None:
         ip_set = set()
         debug_logger.debug("Validating whitelisted IPs")
-        for ip, name in Menu.whitelist:
+        for ip, _name in Menu.whitelist:
             try:
                 ip_calc = IPValidator.validate_get(ip)
                 ip_set.add(ip_calc)
@@ -109,7 +109,7 @@ class Menu:
     def launch_blacklisted_session() -> None:
         ip_set = set()
         debug_logger.debug("Validating blacklisted IPs")
-        for ip, name in Menu.blacklist:
+        for ip, _name in Menu.blacklist:
             try:
                 ip_calc = IPValidator.validate_get(ip)
                 ip_set.add(ip_calc)
@@ -185,7 +185,7 @@ class Menu:
         answer = Menu.confirm_session("Kick Unknowns")
         if answer and answer == Prompts.CONFIRM_SESSION_ANSWER.YES:
             ip_set = set()
-            for ip, name in Menu.whitelist:
+            for ip, _name in Menu.whitelist:
                 try:
                     ip_calc = IPValidator.validate_get(ip)
                     ip_set.add(ip_calc)

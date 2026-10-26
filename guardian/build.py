@@ -1,12 +1,14 @@
+import os
+
 import PyInstaller.__main__
 
-version = "3.5.0"
+version = "3.6.0.dev0"
 
 
 def build() -> None:
     PyInstaller.__main__.run(
         (
-            "guardian\\__main__.py",
+            os.path.join("guardian", "__main__.py"),
             "--onefile",
             "--icon",
             "logo.ico",

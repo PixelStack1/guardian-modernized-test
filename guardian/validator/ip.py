@@ -1,7 +1,7 @@
 import contextlib
 import re
 import socket
-from typing import Callable
+from collections.abc import Callable
 
 from prompt_toolkit.document import Document
 from questionary import ValidationError, Validator
@@ -21,11 +21,11 @@ class IPValidator(Validator):
         )
         ip = document.text
         if not ipv4.match(ip):
-            raise error
+            raise error from None
         try:
             socket.inet_aton(ip)
-        except socket.error:
-            raise error
+        except OSError:
+            raise error from None
         if ip in self.list:
             raise ValidationError(message="IP already in list", cursor_position=len(ip))
 

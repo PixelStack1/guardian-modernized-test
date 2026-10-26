@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 import contextlib
 import logging
 import re
 from abc import ABC, abstractmethod
 from multiprocessing import Manager, Process
-from multiprocessing.connection import PipeConnection
 from multiprocessing.managers import DictProxy, ListProxy
-from typing import Optional
+from typing import TYPE_CHECKING
 
 import pydivert
 
@@ -13,6 +14,10 @@ from network.sessioninfo import SessionInfo
 from util.console import get_original_console_title, set_console_title
 from util.network import ip_in_cidr_block_set
 from util.types import CIDR_BLOCK
+
+if TYPE_CHECKING:
+    # PipeConnection only exists on Windows; only needed for type hints.
+    from multiprocessing.connection import PipeConnection
 
 logger = logging.getLogger(__name__)
 debug_logger = logging.getLogger("debugger")
@@ -97,13 +102,46 @@ KNOWN_SIZES = HEARTBEAT_SIZES.union(MATCHMAKING_SIZES)
 # in case they're useful later on.
 
 
+def is_whitelist_service_packet(payload: bytes) -> bool:
+    """
+    Heuristic (from upstream 3.5.0) recognising R* service / DTLS-handshake style packets by
+    de-obfuscating a few header bytes of the (encrypted) payload. Pure function so it can be unit tested.
+
+    Upstream read the "wrapper" from packet.raw[28:30], i.e. the first two payload bytes assuming a
+    20-byte IPv4 header; payload[0:2] is equivalent and robust to IP options. Payloads shorter than
+    5 bytes used to raise IndexError and kill the filter process; they are now simply not matched.
+    """
+    size = len(payload)
+    if size < 5:
+        return False
+
+    wrapper = int.from_bytes(payload[0:2], "big")
+    if size != wrapper:
+        return False
+
+    magic_byte = payload[4]
+    offset = payload[2] ^ magic_byte
+    code = 0
+    alt = 0
+    if offset == 17 and size >= 27:
+        code = int.from_bytes(payload[25:27], "big")
+        alt = payload[24]
+    elif offset == 49 and size >= 91:
+        code = int.from_bytes(payload[89:91], "big")
+
+    magic = int.from_bytes(bytes([magic_byte, magic_byte]), "big")
+    return (
+        (code ^ magic) in DTLs or (alt ^ magic_byte) in KNOWNS or (code ^ magic) < 0x10
+    )
+
+
 class AbstractPacketFilter(ABC):
     def __init__(
         self,
         ips: set[str],
         priority: int,
         connection: PipeConnection,
-        session_info: Optional[SessionInfo] = None,
+        session_info: SessionInfo | None = None,
         debug: bool = False,
     ):
         self.ips = ips
@@ -148,7 +186,7 @@ class AbstractPacketFilter(ABC):
 
     @staticmethod
     def construct_debug_packet_info(
-        packet: pydivert.Packet, decision: Optional[bool] = None
+        packet: pydivert.Packet, decision: bool | None = None
     ) -> str:
         prefix = "" if decision is None else ("ALLOWING" if decision else "DROPPING")
 
@@ -166,7 +204,7 @@ class SoloSession(AbstractPacketFilter):
         self,
         priority: int,
         connection: PipeConnection,
-        session_info: Optional[SessionInfo] = None,
+        session_info: SessionInfo | None = None,
         debug: bool = False,
     ):
         super().__init__(set(), priority, connection, session_info, debug)
@@ -189,7 +227,7 @@ class WhitelistSession(AbstractPacketFilter):
         ips: set[str],
         priority: int,
         connection: PipeConnection,
-        session_info: Optional[SessionInfo] = None,
+        session_info: SessionInfo | None = None,
         debug: bool = False,
     ):
         super().__init__(ips, priority, connection, session_info, debug)
@@ -203,26 +241,7 @@ class WhitelistSession(AbstractPacketFilter):
         if ip in self.ips or size in HEARTBEAT_SIZES:
             return True
 
-        wrapper = 0 if size < 5 else int.from_bytes(packet.raw[28:30], "big")
-        magic_byte = packet.payload[4]
-
-        if size == wrapper:
-            offset = packet.payload[2] ^ magic_byte
-            code = 0
-            alt = 0
-            if offset == 17 and size >= 27:
-                code = int.from_bytes(packet.payload[25:27], "big")
-                alt = packet.payload[24]
-            elif offset == 49 and size >= 91:
-                code = int.from_bytes(packet.payload[89:91], "big")
-
-            magic = 0 if size < 5 else int.from_bytes([magic_byte, magic_byte], "big")
-            if (
-                code ^ magic in DTLs
-                or alt ^ magic_byte in KNOWNS
-                or code ^ magic < 0x10
-            ):
-                return True
+        return is_whitelist_service_packet(bytes(packet.payload))
 
         return False
 
@@ -237,9 +256,9 @@ class BlacklistSession(AbstractPacketFilter):
         ips: set[str],
         priority: int,
         connection: PipeConnection,
-        blocks: Optional[set[CIDR_BLOCK]] = None,
-        known_allowed: Optional[set[str]] = None,
-        session_info: Optional[SessionInfo] = None,
+        blocks: set[CIDR_BLOCK] | None = None,
+        known_allowed: set[str] | None = None,
+        session_info: SessionInfo | None = None,
         debug: bool = False,
     ) -> None:
         super().__init__(ips, priority, connection, session_info, debug)
@@ -282,7 +301,7 @@ class LockedSession(AbstractPacketFilter):
         self,
         priority: int,
         connection: PipeConnection,
-        session_info: Optional[SessionInfo] = None,
+        session_info: SessionInfo | None = None,
         debug: bool = False,
     ):
         super().__init__(set(), priority, connection, session_info, debug)
@@ -432,13 +451,15 @@ class IPCollector:
 
     def run(self) -> None:
         # TODO: We could also actually check to see *when* the last packet was seen from that IP.
-        with contextlib.suppress(KeyboardInterrupt):
-            with pydivert.WinDivert(
+        with (
+            contextlib.suppress(KeyboardInterrupt),
+            pydivert.WinDivert(
                 PACKET_FILTER, priority=self.priority, flags=pydivert.Flag.SNIFF
-            ) as w:
-                for packet in w:
-                    size = len(packet.payload)
+            ) as w,
+        ):
+            for packet in w:
+                size = len(packet.payload)
 
-                    if packet.is_inbound and size not in KNOWN_SIZES:
-                        src = packet.ip.src_addr
-                        self.add_seen_ip(src)
+                if packet.is_inbound and size not in KNOWN_SIZES:
+                    src = packet.ip.src_addr
+                    self.add_seen_ip(src)

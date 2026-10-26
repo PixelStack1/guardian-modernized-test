@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from multiprocessing import Queue
 from multiprocessing.managers import DictProxy, ListProxy
-from typing import Optional, cast
+from typing import cast
 
 from pydivert import packet
 
@@ -112,7 +114,7 @@ class SessionInfo:
         proxy_dict: DictProxy[str, int],
         proxy_list: ListProxy[ConnectionStats],
         proxy_queue: Queue[tuple[packet.Packet, bool]],
-        initial_ips: Optional[list[IPTag]] = None,
+        initial_ips: list[IPTag] | None = None,
     ) -> None:
         if initial_ips is None:
             initial_ips = []

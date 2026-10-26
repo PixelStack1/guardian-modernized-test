@@ -9,7 +9,7 @@ from util.types import CIDR_BLOCK
 
 
 def get_public_ip() -> str:
-    return requests.get("https://api.ipify.org").text
+    return requests.get("https://api.ipify.org", timeout=10).text
 
 
 def get_private_ip() -> str:

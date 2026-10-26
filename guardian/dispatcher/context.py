@@ -1,8 +1,11 @@
 import logging
 from multiprocessing import Process
-from multiprocessing.connection import PipeConnection
+from typing import TYPE_CHECKING
 
 from network.sessions import AbstractPacketFilter
+
+if TYPE_CHECKING:
+    from multiprocessing.connection import PipeConnection
 
 debug_logger = logging.getLogger("debugger")
 
@@ -15,7 +18,7 @@ class Context:
     _current_priority = 0
     filters: dict[int, AbstractPacketFilter] = {}
 
-    def __init__(self, connection: PipeConnection):
+    def __init__(self, connection: "PipeConnection"):
         self.queue = connection
         self.process = Process(target=self.run, daemon=True)
 
