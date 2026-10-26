@@ -171,3 +171,19 @@ User data (`data.json`, `db.json`, `history.log`, `debugger.log`) is stored in
 - **Stop**: `sc stop WinDivert`, then `sc query WinDivert` should show `STOPPED` or an absent service.
 - **Safest** before games with kernel anti-cheat (Valorant/Vanguard, BattlEye, Easy Anti-Cheat):
   reboot, then check with `sc query WinDivert`.
+
+## Session en direct (version de test)
+
+**Français** — Fonction expérimentale, non publiée. Menu principal → *Session en direct (test)*.
+
+- Tableau des pairs connectés : pays (vide pour l'instant, pas de base géo), heure de première
+  apparition, paquets/s, octets/s, taille moyenne et max (fenêtre glissante de 3 s).
+- La « normale » de chaque pair est apprise pendant ses 60 premières secondes. Ligne orange
+  (« inhabituel ») puis rouge (« suspect ») en cas de rafale ciblée, de paquets énormes ou de longues
+  séries de petits paquets identiques. Seuils : en tête de `guardian/network/anomaly.py`.
+- Touches : `B` bloquer (immédiat + ajout à la Blacklist avec date et pseudo), `P` pseudo,
+  `D` débloquer, `A` auto-blocage, `E` enregistrement, `Q` retour.
+- Auto-blocage des IP rouges pendant 10 min : **désactivé par défaut**
+  (`"auto_block_suspect": true` dans `%LOCALAPPDATA%\Guardian\data.json` pour l'activer).
+- Enregistrement : uniquement des métadonnées (horodatage, IP, taille, sens), jamais le contenu,
+  dans `%LOCALAPPDATA%\Guardian\enregistrements\`.

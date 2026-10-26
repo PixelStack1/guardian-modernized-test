@@ -13,6 +13,8 @@ class ConfigDataType(TypedDict):
     blacklist: dict[str, str]
     whitelist: dict[str, str]
     extra_ports: NotRequired[bool]
+    # Vue Session en direct : auto-blocage 10 min des IP rouges (désactivé par défaut).
+    auto_block_suspect: NotRequired[bool]
 
 
 class ConfigData(metaclass=Singleton):

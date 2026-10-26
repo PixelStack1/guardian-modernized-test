@@ -14,6 +14,7 @@ from config.configdata import ConfigData
 from config.globallist import Blacklist, Whitelist
 from dispatcher.context import Context
 from menu.lists import Lists
+from menu.livesession import run_live_session
 from network.sessions import (
     AbstractPacketFilter,
     BlacklistSession,
@@ -254,6 +255,7 @@ class Prompts:
             "value": Menu.launch_new_session,
         },
         {"name": "Kick by IP", "value": Menu.kick_by_ip},
+        {"name": "Session en direct (test)", "value": run_live_session},
         {"name": "Edit lists", "value": Lists.choose_list},
         {"name": "Speyedr's Discord", "value": Menu.open_discord},
         {"name": "Quit", "value": Menu.quit},
