@@ -99,5 +99,5 @@ def test_azure_parser_random_bytes(body):
 @given(st.sets(st.text(max_size=20), max_size=10))
 def test_accept_list_never_raises(tmp_path_factory, items):
     d = tmp_path_factory.mktemp("c")
-    out = db.accept_list("f", items, {"1.1.1.0/24"}, d)
-    assert out == items or out == {"1.1.1.0/24"}
+    out = db.accept_list("f", items, {"203.0.113.0/26"}, d)
+    assert out == items or out == {"203.0.113.0/26"}

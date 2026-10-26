@@ -68,7 +68,7 @@ def test_window_matches_bruteforce(items, seconds):
 @given(
     st.lists(
         st.tuples(
-            st.sampled_from(["1.1.1.1", "2.2.2.2", "3.3.3.3"]),
+            st.sampled_from(["203.0.113.1", "203.0.113.2", "203.0.113.3"]),
             st.integers(-5, 70000),
             st.floats(0, 200, allow_nan=False),
         ),
@@ -89,45 +89,45 @@ def test_monitor_never_crashes(events):
 
 def test_no_alert_during_learning_or_steady():
     mon = SessionMonitor()
-    feed(mon, "1.1.1.1", 500, 0, 10)  # gros débit mais en apprentissage
+    feed(mon, "203.0.113.1", 500, 0, 10)  # gros débit mais en apprentissage
     assert all(p.level == Level.NORMAL for p in mon.evaluate(10))
     mon = SessionMonitor()
-    t = learned(mon, ["1.1.1.1", "2.2.2.2"])
-    feed(mon, "1.1.1.1", 30, t, t + 20)
-    feed(mon, "2.2.2.2", 30, t, t + 20)
+    t = learned(mon, ["203.0.113.1", "203.0.113.2"])
+    feed(mon, "203.0.113.1", 30, t, t + 20)
+    feed(mon, "203.0.113.2", 30, t, t + 20)
     assert all(p.level == Level.NORMAL for p in mon.evaluate(t + 20))
 
 
 def test_burst_targeted_orange_then_red():
     mon = SessionMonitor()
-    t = learned(mon, ["1.1.1.1", "2.2.2.2", "3.3.3.3"])
-    # 1.1.1.1 passe de 30 à 200 paquets/s (~6.7x) ; les autres restent normaux.
-    feed(mon, "2.2.2.2", 30, t, t + 10)
-    feed(mon, "3.3.3.3", 30, t, t + 10)
-    feed(mon, "1.1.1.1", 200, t, t + 4)
+    t = learned(mon, ["203.0.113.1", "203.0.113.2", "203.0.113.3"])
+    # 203.0.113.1 passe de 30 à 200 paquets/s (~6.7x) ; les autres restent normaux.
+    feed(mon, "203.0.113.2", 30, t, t + 10)
+    feed(mon, "203.0.113.3", 30, t, t + 10)
+    feed(mon, "203.0.113.1", 200, t, t + 4)
     mon.evaluate(t + 4)
-    p = mon.peers["1.1.1.1"]
+    p = mon.peers["203.0.113.1"]
     assert p.level == Level.INHABITUEL
     assert "rafale de 200 paquets/s, normale 30" in p.alert
     assert "ciblée" in p.alert
-    feed(mon, "1.1.1.1", 200, t + 4, t + 10)
+    feed(mon, "203.0.113.1", 200, t + 4, t + 10)
     mon.evaluate(t + 10)
     assert p.level == Level.SUSPECT
-    assert mon.peers["2.2.2.2"].level == Level.NORMAL
+    assert mon.peers["203.0.113.2"].level == Level.NORMAL
 
 
 def test_severe_burst_is_red_immediately():
     mon = SessionMonitor()
-    t = learned(mon, ["1.1.1.1", "2.2.2.2"])
-    feed(mon, "2.2.2.2", 30, t, t + 4)
-    feed(mon, "1.1.1.1", 900, t + 1, t + 4)
+    t = learned(mon, ["203.0.113.1", "203.0.113.2"])
+    feed(mon, "203.0.113.2", 30, t, t + 4)
+    feed(mon, "203.0.113.1", 900, t + 1, t + 4)
     mon.evaluate(t + 4)
-    assert mon.peers["1.1.1.1"].level == Level.SUSPECT
+    assert mon.peers["203.0.113.1"].level == Level.SUSPECT
 
 
 def test_session_wide_burst_is_not_flagged():
     mon = SessionMonitor()
-    ips = ["1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"]
+    ips = ["203.0.113.1", "203.0.113.2", "203.0.113.3", "203.0.113.4"]
     t = learned(mon, ips)
     for ip in ips:
         feed(mon, ip, 300, t, t + 4)
@@ -136,57 +136,57 @@ def test_session_wide_burst_is_not_flagged():
 
 def test_burst_baseline_floor():
     mon = SessionMonitor()
-    t = learned(mon, ["1.1.1.1"], pps=1)
-    feed(mon, "1.1.1.1", 40, t, t + 4)  # 40x mais < BURST_MIN_PPS
+    t = learned(mon, ["203.0.113.1"], pps=1)
+    feed(mon, "203.0.113.1", 40, t, t + 4)  # 40x mais < BURST_MIN_PPS
     mon.evaluate(t + 4)
-    assert mon.peers["1.1.1.1"].level == Level.NORMAL
+    assert mon.peers["203.0.113.1"].level == Level.NORMAL
 
 
 def test_baseline_robust_to_learning_spike():
     mon = SessionMonitor()
-    feed(mon, "1.1.1.1", 30, 0, an.BASELINE_SECONDS + 1)
-    feed(mon, "1.1.1.1", 2000, 5, 6)  # pic bref pendant l'apprentissage
+    feed(mon, "203.0.113.1", 30, 0, an.BASELINE_SECONDS + 1)
+    feed(mon, "203.0.113.1", 2000, 5, 6)  # pic bref pendant l'apprentissage
     mon.evaluate(an.BASELINE_SECONDS + 1)
-    assert mon.peers["1.1.1.1"].baseline_pps == 30
+    assert mon.peers["203.0.113.1"].baseline_pps == 30
 
 
 def test_huge_packets_flagged():
     mon = SessionMonitor()
-    t = learned(mon, ["1.1.1.1", "2.2.2.2"])
-    feed(mon, "2.2.2.2", 30, t, t + 4, size=400)
-    feed(mon, "1.1.1.1", 30, t, t + 4, size=1400)
+    t = learned(mon, ["203.0.113.1", "203.0.113.2"])
+    feed(mon, "203.0.113.2", 30, t, t + 4, size=400)
+    feed(mon, "203.0.113.1", 30, t, t + 4, size=1400)
     mon.evaluate(t + 4)
-    p = mon.peers["1.1.1.1"]
+    p = mon.peers["203.0.113.1"]
     assert p.level >= Level.INHABITUEL
     assert "paquets énormes" in p.alert
 
 
 def test_tiny_identical_run_flagged_but_not_heartbeats():
     mon = SessionMonitor()
-    t = learned(mon, ["1.1.1.1", "2.2.2.2"])
-    feed(mon, "1.1.1.1", 60, t, t + 4, size=4)
-    feed(mon, "2.2.2.2", 60, t, t + 4, size=12)  # taille de heartbeat ignorée
+    t = learned(mon, ["203.0.113.1", "203.0.113.2"])
+    feed(mon, "203.0.113.1", 60, t, t + 4, size=4)
+    feed(mon, "203.0.113.2", 60, t, t + 4, size=12)  # taille de heartbeat ignorée
     mon.evaluate(t + 4)
-    assert "petits paquets identiques" in mon.peers["1.1.1.1"].alert
-    assert mon.peers["2.2.2.2"].level == Level.NORMAL
+    assert "petits paquets identiques" in mon.peers["203.0.113.1"].alert
+    assert mon.peers["203.0.113.2"].level == Level.NORMAL
 
 
 def test_returns_to_normal_after_calm():
     mon = SessionMonitor()
-    t = learned(mon, ["1.1.1.1", "2.2.2.2"])
-    feed(mon, "2.2.2.2", 30, t, t + 2)
-    feed(mon, "1.1.1.1", 300, t, t + 2)
+    t = learned(mon, ["203.0.113.1", "203.0.113.2"])
+    feed(mon, "203.0.113.2", 30, t, t + 2)
+    feed(mon, "203.0.113.1", 300, t, t + 2)
     mon.evaluate(t + 2)
-    assert mon.peers["1.1.1.1"].level == Level.INHABITUEL
-    feed(mon, "2.2.2.2", 30, t + 2, t + 8)
-    feed(mon, "1.1.1.1", 30, t + 2, t + 8)
+    assert mon.peers["203.0.113.1"].level == Level.INHABITUEL
+    feed(mon, "203.0.113.2", 30, t + 2, t + 8)
+    feed(mon, "203.0.113.1", 30, t + 2, t + 8)
     mon.evaluate(t + 8)  # encore dans CALM_SECONDS
-    assert mon.peers["1.1.1.1"].level == Level.INHABITUEL
-    feed(mon, "2.2.2.2", 30, t + 8, t + 30)
-    feed(mon, "1.1.1.1", 30, t + 8, t + 30)
+    assert mon.peers["203.0.113.1"].level == Level.INHABITUEL
+    feed(mon, "203.0.113.2", 30, t + 8, t + 30)
+    feed(mon, "203.0.113.1", 30, t + 8, t + 30)
     mon.evaluate(t + 30)
-    assert mon.peers["1.1.1.1"].level == Level.NORMAL
-    assert mon.peers["1.1.1.1"].alert == ""
+    assert mon.peers["203.0.113.1"].level == Level.NORMAL
+    assert mon.peers["203.0.113.1"].alert == ""
 
 
 # -- enregistrement : métadonnées uniquement -----------------------------------
@@ -196,16 +196,16 @@ def test_recorder_metadata_only(tmp_path):
     from guardian.network.recorder import HEADER, MetadataRecorder
 
     rec = MetadataRecorder(tmp_path)
-    rec.write(1.0, "1.1.1.1", 10, True)  # inactif : ignoré
+    rec.write(1.0, "203.0.113.1", 10, True)  # inactif : ignoré
     path = rec.start()
-    rec.write(2.5, "1.1.1.1", 100, True)
-    rec.write(3.0, "2.2.2.2", 50, False)
+    rec.write(2.5, "203.0.113.1", 100, True)
+    rec.write(3.0, "203.0.113.2", 50, False)
     rec.stop()
     rows = list(csv.reader(path.open(encoding="utf-8")))
     assert tuple(rows[0]) == HEADER
     assert rows[1:] == [
-        ["2.500000", "1.1.1.1", "100", "entrant"],
-        ["3.000000", "2.2.2.2", "50", "sortant"],
+        ["2.500000", "203.0.113.1", "100", "entrant"],
+        ["3.000000", "203.0.113.2", "50", "sortant"],
     ]
 
 
@@ -219,21 +219,21 @@ def test_peer_cap_spoofed_flood():
     assert len(mon.peers) == an.MAX_PEERS
     mon.evaluate(1.0)
     # Une fois les anciens pairs inactifs, de nouveaux peuvent prendre leur place.
-    mon.add_packet("99.99.99.99", 50, 1.0 + an.CONNECTED_SECONDS + 1)
-    assert "99.99.99.99" in mon.peers
+    mon.add_packet("203.0.113.99", 50, 1.0 + an.CONNECTED_SECONDS + 1)
+    assert "203.0.113.99" in mon.peers
     assert len(mon.peers) == an.MAX_PEERS
 
 
 def test_huge_uses_others_max_not_own():
     # Le plus gros émetteur est comparé au 2e max, les autres au 1er.
     mon = SessionMonitor()
-    t = learned(mon, ["1.1.1.1", "2.2.2.2", "3.3.3.3"])
-    feed(mon, "2.2.2.2", 30, t, t + 4, size=400)
-    feed(mon, "3.3.3.3", 30, t, t + 4, size=300)
-    feed(mon, "1.1.1.1", 30, t, t + 4, size=1400)
+    t = learned(mon, ["203.0.113.1", "203.0.113.2", "203.0.113.3"])
+    feed(mon, "203.0.113.2", 30, t, t + 4, size=400)
+    feed(mon, "203.0.113.3", 30, t, t + 4, size=300)
+    feed(mon, "203.0.113.1", 30, t, t + 4, size=1400)
     mon.evaluate(t + 4)
-    assert "énormes (1400 o, max des autres 400 o)" in mon.peers["1.1.1.1"].alert
-    assert mon.peers["2.2.2.2"].level == Level.NORMAL
+    assert "énormes (1400 o, max des autres 400 o)" in mon.peers["203.0.113.1"].alert
+    assert mon.peers["203.0.113.2"].level == Level.NORMAL
 
 
 # -- enregistrement : rotation / limite -------------------------------------------
@@ -246,7 +246,7 @@ def test_recorder_rotates_and_stops(tmp_path):
     rec.max_lines, rec.max_files = 10, 3
     rec.start()
     for i in range(100):
-        rec.write(float(i), "1.1.1.1", 10, True)
+        rec.write(float(i), "203.0.113.1", 10, True)
     assert rec.stopped_by_limit and not rec.active
     files = sorted(tmp_path.glob("*.csv"))
     assert len(files) == 3
@@ -261,6 +261,6 @@ def test_recorder_byte_limit(tmp_path):
     rec.max_bytes, rec.max_files = 1000, 1
     rec.start()
     for i in range(1000):
-        rec.write(float(i), "1.1.1.1", 10, True)
+        rec.write(float(i), "203.0.113.1", 10, True)
     assert rec.stopped_by_limit
     assert next(tmp_path.glob("*.csv")).stat().st_size < 2000

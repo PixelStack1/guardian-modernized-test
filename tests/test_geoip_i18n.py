@@ -36,7 +36,10 @@ def test_switch_language():
         assert i18n.t("menu.quit") == "Quitter"
         i18n.set_language("en", persist=False)
         assert i18n.t("menu.quit") == "Quit"
-        assert i18n.t("live.ev.unblocked", ip="1.2.3.4") == "IP 1.2.3.4 unblocked"
+        assert (
+            i18n.t("live.ev.unblocked", ip="203.0.113.34")
+            == "IP 203.0.113.34 unblocked"
+        )
         assert i18n.t("cle.inconnue") == "cle.inconnue"
         with pytest.raises(ValueError):
             i18n.set_language("de", persist=False)

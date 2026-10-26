@@ -30,45 +30,45 @@ def make(auto=None, existing=None):
 
 
 def test_existing_blacklist_is_blocked():
-    _, blocked, _, _ = make(existing={"9.9.9.9": "x"})
-    assert ls.is_blocked(blocked, "9.9.9.9", 0)
+    _, blocked, _, _ = make(existing={"203.0.113.9": "x"})
+    assert ls.is_blocked(blocked, "203.0.113.9", 0)
 
 
 def test_manual_block_persists_with_pseudo_and_date():
     ctrl, blocked, bl, _ = make()
-    ctrl.pseudos["1.1.1.1"] = "Tryhard42"
-    ctrl.block("1.1.1.1")
-    assert ls.is_blocked(blocked, "1.1.1.1", 10**12)
-    assert bl["1.1.1.1"].startswith("Tryhard42 [bloqué le ")
+    ctrl.pseudos["203.0.113.1"] = "Tryhard42"
+    ctrl.block("203.0.113.1")
+    assert ls.is_blocked(blocked, "203.0.113.1", 10**12)
+    assert bl["203.0.113.1"].startswith("Tryhard42 [bloqué le ")
     assert bl.saved == 1
-    ctrl.unblock("1.1.1.1")
-    assert "1.1.1.1" not in bl and "1.1.1.1" not in blocked
+    ctrl.unblock("203.0.113.1")
+    assert "203.0.113.1" not in bl and "203.0.113.1" not in blocked
 
 
 def test_auto_block_off_by_default():
     ctrl, blocked, _, _ = make()
     assert not ctrl.auto_block
-    p = PeerState("1.1.1.1", 0, 0, level=Level.SUSPECT)
+    p = PeerState("203.0.113.1", 0, 0, level=Level.SUSPECT)
     assert not ctrl.auto_block_if_needed(p)
     assert not blocked
 
 
 def test_auto_block_red_only_when_enabled():
     ctrl, blocked, bl, _ = make(auto=True)
-    p = PeerState("1.1.1.1", 0, 0, level=Level.SUSPECT, reason_key="reason.burst")
+    p = PeerState("203.0.113.1", 0, 0, level=Level.SUSPECT, reason_key="reason.burst")
     assert ctrl.auto_block_if_needed(p)
-    assert "1.1.1.1" in blocked and "1.1.1.1" not in bl
-    assert ctrl.events[-1].startswith("Bouclier auto : 1.1.1.1 bloqué (rafale)")
-    orange = PeerState("2.2.2.2", 0, 0, level=Level.INHABITUEL)
+    assert "203.0.113.1" in blocked and "203.0.113.1" not in bl
+    assert ctrl.events[-1].startswith("Bouclier auto : 203.0.113.1 bloqué (rafale)")
+    orange = PeerState("203.0.113.2", 0, 0, level=Level.INHABITUEL)
     assert not ctrl.auto_block_if_needed(orange)
-    assert "2.2.2.2" not in blocked
+    assert "203.0.113.2" not in blocked
 
 
 def test_auto_block_never_whitelist_or_rockstar_but_manual_can():
     from guardian.util.network import construct_cidr_block_set
 
     azure = construct_cidr_block_set(["20.0.0.0/8"])
-    guard = ls.make_auto_block_guard({"5.5.5.5"}, azure)
+    guard = ls.make_auto_block_guard({"203.0.113.5"}, azure)
     clock = [1000.0]
     blocked = {}
     bl = FakeList()
@@ -81,35 +81,37 @@ def test_auto_block_never_whitelist_or_rockstar_but_manual_can():
     import ipaddress
 
     rockstar_ip = str(ipaddress.IPv4Address(rockstar_ip[0]))
-    for ip in ("5.5.5.5", "20.1.2.3", rockstar_ip):
+    for ip in ("203.0.113.5", "20.1.2.3", rockstar_ip):
         assert guard(ip), ip
         red = PeerState(ip, 0, 0, level=Level.SUSPECT)
         assert not ctrl.auto_block_if_needed(red)
         assert ip not in blocked
     assert "non bloqué" in ctrl.events[-1]
-    assert ctrl.auto_block_if_needed(PeerState("9.8.7.6", 0, 0, level=Level.SUSPECT))
-    ctrl.block("5.5.5.5")  # le manuel peut tout bloquer
-    assert "5.5.5.5" in blocked and "5.5.5.5" in bl
+    assert ctrl.auto_block_if_needed(
+        PeerState("203.0.113.76", 0, 0, level=Level.SUSPECT)
+    )
+    ctrl.block("203.0.113.5")  # le manuel peut tout bloquer
+    assert "203.0.113.5" in blocked and "203.0.113.5" in bl
 
 
 def test_auto_block_can_be_disabled():
     ctrl, blocked, _, _ = make(auto=False)
-    p = PeerState("1.1.1.1", 0, 0, level=Level.SUSPECT)
+    p = PeerState("203.0.113.1", 0, 0, level=Level.SUSPECT)
     assert not ctrl.auto_block_if_needed(p)
     assert not blocked
 
 
 def test_auto_block_temporary_not_persisted():
     ctrl, blocked, bl, clock = make(auto=True)
-    orange = PeerState("2.2.2.2", 0, 0, level=Level.INHABITUEL)
-    red = PeerState("1.1.1.1", 0, 0, level=Level.SUSPECT)
+    orange = PeerState("203.0.113.2", 0, 0, level=Level.INHABITUEL)
+    red = PeerState("203.0.113.1", 0, 0, level=Level.SUSPECT)
     assert not ctrl.auto_block_if_needed(orange)
     assert ctrl.auto_block_if_needed(red)
-    assert ls.is_blocked(blocked, "1.1.1.1", clock[0])
-    assert "1.1.1.1" not in bl
+    assert ls.is_blocked(blocked, "203.0.113.1", clock[0])
+    assert "203.0.113.1" not in bl
     clock[0] += ls.AUTO_BLOCK_SECONDS
     ctrl.expire()
-    assert "1.1.1.1" not in blocked
+    assert "203.0.113.1" not in blocked
 
 
 def test_blacklist_label():

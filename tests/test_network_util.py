@@ -14,7 +14,7 @@ from guardian.util.network import (
 
 
 def test_ip_to_int():
-    assert calculate_ip_to_int("1.2.3.4") == 0x01020304
+    assert calculate_ip_to_int("203.0.113.34") == 0xCB007122
 
 
 def test_cidr():
@@ -49,9 +49,9 @@ def test_ripe_parsing_ignores_extra_fields_and_ipv6():
 
 def test_ripe_fallback_on_error():
     with mock.patch.object(db.requests, "get", side_effect=requests.ConnectionError):
-        assert db.get_announced_prefixes(1, {"1.1.1.0/24"}) == {"1.1.1.0/24"}
+        assert db.get_announced_prefixes(1, {"203.0.113.0/26"}) == {"203.0.113.0/26"}
     with mock.patch.object(db.requests, "get", return_value=_resp({"bad": 1})):
-        assert db.get_announced_prefixes(1, {"1.1.1.0/24"}) == {"1.1.1.0/24"}
+        assert db.get_announced_prefixes(1, {"203.0.113.0/26"}) == {"203.0.113.0/26"}
 
 
 def test_import_has_no_network_side_effect():
@@ -75,11 +75,11 @@ def test_parse_azure():
         "10.0.0.0/7",
         "x/8",
         "2a00::/32",
-        "1.2.3.4",
+        "203.0.113.34",
     ],
 )
 def test_cidr_rejects_invalid(bad):
-    if bad == "1.2.3.4":
+    if bad == "203.0.113.34":
         # bare IPv4 is a valid /32
         assert cidr_to_tuple(bad) == (calculate_ip_to_int(bad), 32)
         return
@@ -114,7 +114,7 @@ def test_capped_rejects_large_stream():
 def test_ripe_oversized_falls_back():
     r = _resp(b"x", headers={"Content-Length": str(10**9)})
     with mock.patch.object(db.requests, "get", return_value=r):
-        assert db.get_announced_prefixes(1, {"1.1.1.0/24"}) == {"1.1.1.0/24"}
+        assert db.get_announced_prefixes(1, {"203.0.113.0/26"}) == {"203.0.113.0/26"}
 
 
 def _ipify(text):

@@ -18,6 +18,7 @@ import os
 import platform
 import queue
 import threading
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -78,7 +79,7 @@ def build_report(
         "end": _iso(now),
         "duration_seconds": round(now - start, 3),
         "guardian_version": __version__,
-        "platform": platform.platform(),
+        "platform": platform.system(),
         "source": {
             "ip": ip,
             "ports": sorted(peer.ports) if peer else [],
@@ -87,7 +88,7 @@ def build_report(
             "asn": None,
             "direction": "inbound",
         },
-        "pseudo": pseudo.strip(),
+        "pseudo": clean_pseudo(pseudo),
     }
     if peer is not None:
         presence = max(peer.last_seen - peer.first_seen, 1e-9)
@@ -162,6 +163,11 @@ def format_text(r: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def clean_pseudo(pseudo: str) -> str:
+    """Pseudo sur une seule ligne, 64 caractères max (pas d'injection de lignes)."""
+    return pseudo.replace("\n", " ").replace("\r", " ")[:64].strip()
+
+
 def _safe_name(ip: str) -> str:
     return "".join(c if c.isalnum() or c in ".-" else "_" for c in ip)[:64]
 
@@ -169,10 +175,18 @@ def _safe_name(ip: str) -> str:
 def rotate(directory: Path, keep: int = MAX_REPORTS) -> None:
     with contextlib.suppress(OSError):
         reports = sorted(directory.glob("*.json"))
-        for old in reports[: max(0, len(reports) - keep)]:
-            for path in (old, old.with_suffix(".txt")):
-                with contextlib.suppress(OSError):
-                    path.unlink()
+        doomed = [
+            p
+            for old in reports[: max(0, len(reports) - keep)]
+            for p in (old, old.with_suffix(".txt"))
+        ]
+        # .txt orphelins (sans .json associé, ex. écriture interrompue).
+        doomed += [
+            p for p in directory.glob("*.txt") if not p.with_suffix(".json").exists()
+        ]
+        for path in doomed:
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
 
 
 def write_report(
@@ -195,8 +209,13 @@ def write_report(
             (js, json.dumps(report, ensure_ascii=False, indent=2)),
         ):
             tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(content, encoding="utf-8")
-            os.replace(tmp, path)
+            try:
+                tmp.write_text(content, encoding="utf-8")
+                os.replace(tmp, path)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    tmp.unlink(missing_ok=True)
+                raise
         rotate(directory)
         return txt, js
     except Exception as e:  # disque plein, droits, etc. : ne jamais casser la vue
@@ -210,7 +229,7 @@ class ReportWriter:
     def __init__(self, directory: Path | None = None) -> None:
         self.directory = directory
         self._queue: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=1000)
-        self.written: list[Path] = []
+        self.written: deque[Path] = deque(maxlen=MAX_REPORTS)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
