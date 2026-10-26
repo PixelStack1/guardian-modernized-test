@@ -4,6 +4,7 @@ from prompt_toolkit.document import Document
 from questionary import ValidationError, Validator
 
 from config.globallist import Blacklist, GlobalList, Whitelist
+from util.i18n import t
 
 
 class NameValidator(Validator):
@@ -14,7 +15,7 @@ class NameValidator(Validator):
         name = document.text
         if self.list.has(name):
             raise ValidationError(
-                message="Name already in list", cursor_position=len(name)
+                message=t("valid.name_exists"), cursor_position=len(name)
             )
 
 

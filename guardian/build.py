@@ -18,6 +18,11 @@ def build() -> None:
             f"Guardian-{version}",
             "--version-file",
             "version.txt",
+            # Base de géolocalisation hors ligne (util/geoip.py la lit sous util/).
+            "--add-data",
+            os.path.abspath(os.path.join("guardian", "util", "geoip_ipv4.bin.gz"))
+            + os.pathsep
+            + "util",
             "--specpath",
             "spec",
         )

@@ -9,11 +9,11 @@ from menu.menu import Menu
 from network.sessions import FilterOpenError, extra_ports_enabled, probe_filter
 from util.crash import crash_report
 from util.driver import DriverLifecycle
+from util.i18n import t
 from util.integrity import IntegrityError, secure_windivert
 from util.paths import data_file
 from util.printer import print_white
-
-__version__ = "3.6.0"
+from util.version import __version__
 
 logger = logging.getLogger(__name__)
 logger.propagate = False
@@ -46,15 +46,15 @@ if __name__ == "__main__":
 
     try:
         if not ctypes.windll.shell32.IsUserAnAdmin():
-            print_white("Please restart as administrator")
+            print_white(t("main.need_admin"))
             logger.info("Started without admin")
-            input("Press enter to exit.")
+            input(t("main.press_enter"))
             sys.exit()
-        print_white("Initialising...")
+        print_white(t("main.init"))
         try:
             hashes = secure_windivert()
         except IntegrityError as e:
-            print_white(f"Refusing to start: WinDivert integrity check failed ({e})")
+            print_white(t("main.integrity", e=e))
             logger.error("WinDivert integrity check failed: %s", e)
             sys.exit(3)
         logger.info("WinDivert binaries verified: %s", hashes)
@@ -63,7 +63,7 @@ if __name__ == "__main__":
         try:
             probe_filter(extra_ports_enabled())
         except FilterOpenError as e:
-            print_white(f"Could not open the WinDivert filter, exiting cleanly: {e}")
+            print_white(t("main.filter_failed", e=e))
             logger.error("WinDivert filter open failed: %s", e)
             driver.cleanup()
             sys.exit(4)
@@ -75,7 +75,7 @@ if __name__ == "__main__":
     try:
         if "--self-test-exit" in sys.argv:
             # Non-interactive quit path used by CI: initialise (driver loaded), then exit normally.
-            print_white("Self-test: initialised, exiting normally")
+            print_white(t("main.self_test"))
         else:
             Menu.main_menu()
     except KeyboardInterrupt:

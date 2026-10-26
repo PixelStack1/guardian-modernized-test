@@ -45,6 +45,7 @@ The most important requirement for securing a session with Guardian is that you 
 
 - *Whitelisted Session*
   - Only IP addresses in your `Whitelist` will be allowed to connect to you. If you are the host of a session, anyone not in your whitelist will likely lose connection to the session. If you are not the host of your current session and other players in your current session are not on your whitelist (whether already in the session or joining sometime later), you will lose connection to everyone else when you enable this type of session. Ths is because your client will not be able to communicate with these players and you do not have host privileges to kick them out of the session.
+  - Volontaire et repris du Guardian d'origine 3.5.0 : en mode Liste blanche, Guardian lit seulement quelques octets d'en-tête des paquets UDP chiffrés pour reconnaître les services Rockstar ; rien n'est enregistré ni affiché, et le jeu n'est pas lu. *(Intentional, from the original Guardian 3.5.0: in Whitelisted mode Guardian only reads a few header bytes of encrypted UDP packets to recognise Rockstar services; nothing is logged or shown, and the game is not read.)*
 
 - *Blacklisted Session*
   - IP addresses in your `Blacklist` will not be allowed to connect to you. If a connection is routed through R\* servers, that connection will also be blocked as a security measure. This mode is *not recommended* as GTA Online has custom routing if only a handful of IP addresses are blocked.
@@ -171,3 +172,92 @@ User data (`data.json`, `db.json`, `history.log`, `debugger.log`) is stored in
 - **Stop**: `sc stop WinDivert`, then `sc query WinDivert` should show `STOPPED` or an absent service.
 - **Safest** before games with kernel anti-cheat (Valorant/Vanguard, BattlEye, Easy Anti-Cheat):
   reboot, then check with `sc query WinDivert`.
+
+## Session publique en hôte au départ / Public session, host first
+
+Entrée de menu « Session publique en hôte au départ » (EN : « Public session, host first »). Elle
+n'est active que si tu la choisis dans le menu.
+
+1. **Phase 1, 60 secondes fixes** (`HOST_FIRST_SECONDS` dans `guardian/network/sessions.py`, aucun
+   réglage, aucune touche) : exactement le filtrage de la session solo (`SoloSession`) — les
+   heartbeats et le trafic Rockstar/Take-Two sur les ports 61455-61458 passent, les demandes
+   d'entrée (joins) sont jetées. Un compte à rebours s'affiche. Lance à ce moment une nouvelle
+   session publique dans le jeu : seul, tu en deviens l'hôte.
+2. **Phase 2** : au bout de 60 s, réouverture **automatique** (« Session ouverte ») : simple
+   transfert, aucun join bloqué, comme une session publique normale ; le handle WinDivert est
+   ensuite fermé. Pas de touche pour rouvrir plus tôt.
+
+Uniquement du rejet pendant la phase 1 : aucun paquet n'est fabriqué, modifié ni envoyé, et le jeu
+n'est ni lu ni modifié.
+
+⚠️ **Guardian ne peut pas vérifier que tu es hôte** ; les **60 s sont une estimation** du temps
+nécessaire pour créer la session. Une fois hôte, **les nouveaux joueurs qui arrivent ne te retirent
+pas l'hôte** (l'hôte ne change que s'il quitte la session).
+
+## Session en direct (version de test)
+
+**Français** — Fonction expérimentale, non publiée. Menu principal → *Session en direct (test)*.
+
+- Tableau des pairs connectés : pays avec drapeau (ex. `🇫🇷 FR`, `—` si IP privée ou inconnue),
+  heure de première apparition, paquets/s, octets/s, taille moyenne et max (fenêtre glissante de 3 s).
+- La « normale » de chaque pair est apprise pendant ses 60 premières secondes. Ligne orange
+  (« inhabituel ») puis rouge (« suspect ») en cas de rafale ciblée, de paquets énormes ou de longues
+  séries de petits paquets identiques. Seuils : en tête de `guardian/network/anomaly.py`.
+- **Bouclier auto** (IP rouges uniquement) : **désactivé par défaut** pendant la phase de test.
+  À activer avec la touche `A` (ou `"auto_block_suspect": true` dans
+  `%LOCALAPPDATA%\Guardian\data.json`) une fois les seuils validés. Il bloque l'IP **7 jours**
+  et affiche `Bouclier auto : <ip> bloqué (rafale)`. Ces blocages sont **persistants** (ils survivent
+  à un redémarrage) dans un fichier **séparé**, `%LOCALAPPDATA%\Guardian\auto_block.json`
+  (IP + date d'expiration uniquement), jamais dans la liste noire de `data.json`. Ils **expirent
+  tout seuls** (purge au chargement et en continu) et se lèvent avant terme avec `D`.
+  ⚠️ Un innocent bloqué par erreur le reste **7 jours**, sauf déblocage manuel avec `D`.
+  Il ne bloque **jamais** une IP de la liste blanche ni une plage Rockstar/Take-Two/Azure connue
+  (filtre appliqué aussi au chargement du fichier). Si les plages Rockstar/Azure n'ont pas pu être
+  chargées, le bouclier auto reste désactivé et les entrées du fichier ne sont pas appliquées.
+  Les IP orange ne sont jamais bloquées automatiquement.
+- **Bouclier manuel** (`B`) : bloque n'importe quelle IP choisie et l'écrit **de façon permanente**
+  dans la liste noire de `data.json` (avec date et pseudo) ; `D` pour débloquer (retire aussi
+  l'IP de la liste noire, ou de `auto_block.json` pour un blocage auto).
+- **Blocage total** (touche `T`, ou `"total_block": true` dans `data.json`) : **désactivé par
+  défaut**. Quand il est actif et qu'une IP est bloquée (bouclier auto rouge ou `B`), Guardian jette
+  **aussi les paquets sortants** vers cette IP précise pendant **10 min** (`TOTAL_BLOCK_SECONDS`,
+  en mémoire, jamais enregistré) ; ensuite seul le blocage entrant habituel continue (7 jours pour
+  l'auto, permanent pour `B`). `D` lève aussi la coupure sortante. Repasser `T` à OFF lève **immédiatement toutes** les coupures sortantes en cours (le
+  blocage entrant, lui, ne change pas : 7 jours pour l'auto, permanent pour `B`). Uniquement du rejet : aucun
+  paquet n'est fabriqué, modifié ni envoyé au joueur ; en cas d'erreur, le paquet passe. Aucun
+  trafic supplémentaire n'est capturé : le filtre reste le filtre strict (UDP vers 6672), tout
+  le reste est réinjecté immédiatement. Mêmes garde-fous que le bouclier auto (jamais liste blanche,
+  Rockstar/Take-Two ni Azure ; indisponible si les plages Rockstar/Azure n'ont pas pu être chargées).
+  ⚠️ Cela coupe **seulement la liaison entre toi et ce joueur** ; ce n'est **pas un kick garanti**
+  de toute la session, et **si ce joueur est l'hôte, c'est toi qui peux être éjecté**.
+- Touches : `B` bloquer (immédiat + ajout à la liste noire avec date et pseudo), `P` pseudo,
+  `D` débloquer, `A` bouclier auto, `T` blocage total, `E` enregistrement, `Q` retour.
+- Enregistrement : uniquement des métadonnées (horodatage, IP, taille, sens), jamais le contenu,
+  dans `%LOCALAPPDATA%\Guardian\enregistrements\`. Nouveau fichier tous les 1 000 000 lignes /
+  100 Mo, arrêt automatique après 5 fichiers.
+
+## Langue / Language
+
+Menu principal → *Langue* : Français (par défaut) ou English. Réglage `"language": "fr"` / `"en"`
+dans `data.json`. Traductions : `guardian/util/i18n.py`.
+
+## Géolocalisation / Geolocation
+
+Base hors ligne (aucun appel réseau) : [sapics/ip-location-db](https://github.com/sapics/ip-location-db),
+jeu `geo-whois-asn-country` IPv4, licence **CC0-1.0** (domaine public). Fichier compact
+`guardian/util/geoip_ipv4.bin.gz` (~1 Mo), régénérable avec `tools/build_geoip.py`. Pays approximatif.
+
+### Rapports d'incident (automatiques)
+
+À chaque blocage depuis la vue « Session en direct » (bouclier auto rouge **ou** touche B), Guardian écrit
+immédiatement deux fichiers dans `%LOCALAPPDATA%\Guardian\rapports\` (`AAAAMMJJ-HHMMSS_<ip>.txt` et `.json`) :
+identifiant court, début/fin avec fuseau, durée, version, IP source, ports observés, pays (pas d'ASN : aucune
+base hors ligne fournie), type et niveau d'anomalie, paquets/s moyen et pic, totaux, taille max, référence
+apprise vs observé, extrait de la fenêtre glissante, et un champ pseudo facultatif. Le .txt commence par un
+en-tête prêt à coller pour Rockstar et rappelle qu'**une IP n'identifie pas un compte et ne garantit aucun ban**.
+Un blocage manuel sans anomalie produit un rapport allégé. Les 200 derniers rapports sont conservés.
+Écriture dans un thread dédié, hors capture ; aucune erreur disque ne peut interrompre la vue ; aucun appel réseau,
+uniquement des métadonnées (jamais le contenu des paquets).
+
+Si les plages Rockstar/Azure (`dynamic_blacklist`) n'ont pas pu être chargées, le bouclier auto reste désactivé
+et la vue l'indique.

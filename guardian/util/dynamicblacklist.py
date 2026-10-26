@@ -19,6 +19,8 @@ class ScrapeError(Exception):
     """Could not scrape the HTML for data for some reason."""
 
 
+# Vérifié le 2026-10-26 : RIPEstat announced-prefixes AS202021 (« RSOE-EU Take-Two
+# Interactive Software, Inc. ») + RDAP RIPE 185.56.64.0/22 (US-T2OE-EMEA, Take-Two).
 # https://whois.ipip.net/AS202021
 T2_EU_FALLBACK = {
     "185.56.64.0/24",
@@ -28,6 +30,8 @@ T2_EU_FALLBACK = {
     "185.56.67.0/24",
 }
 
+# Vérifié le 2026-10-26 : RIPEstat announced-prefixes AS46555 (« RSOE-NA - TAKE-TWO
+# INTERACTIVE SOFTWARE, INC. ») + RDAP ARIN (RSONET-NA1..NA4, entité TTIS-4 Take-Two).
 # https://whois.ipip.net/AS46555
 T2_US_FALLBACK = {
     "104.255.104.0/24",
@@ -46,6 +50,14 @@ T2_US_FALLBACK = {
     "192.81.246.0/24",
     "192.81.247.0/24",
     "198.133.210.0/24",
+    # RSONET-NA4 (ARIN NET-164-153-136-0-1, TTIS-4), annoncé par AS46555.
+    "164.153.136.0/22",
+    "164.153.136.0/23",
+    "164.153.136.0/24",
+    "164.153.137.0/24",
+    "164.153.138.0/23",
+    "164.153.138.0/24",
+    "164.153.139.0/24",
 }
 
 
@@ -54,12 +66,17 @@ MAX_RIPE_BYTES = 1 * 1024 * 1024
 MAX_PAGE_BYTES = 2 * 1024 * 1024
 
 
+# Délai max (secondes) de chaque requête HTTP : jamais d'attente infinie.
+REQUEST_TIMEOUT = 15
+
+
 class ResponseTooLarge(Exception):
     """Remote response exceeded the configured size cap."""
 
 
 def get_capped(url: str, max_bytes: int, **kwargs: object) -> bytes:
-    """GET with stream=True, refusing bodies larger than max_bytes."""
+    """GET with stream=True, refusing bodies larger than max_bytes. Always time-limited."""
+    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
     with requests.get(url, stream=True, **kwargs) as response:  # type: ignore[arg-type]
         response.raise_for_status()
         length = response.headers.get("Content-Length")
@@ -243,7 +260,7 @@ def determine_best_azure_file(urls: list[str]) -> tuple[str, bytes]:
     best_response = b""
     best_url = ""
     for url in urls:
-        content = get_capped(url, MAX_AZURE_BYTES, timeout=30)
+        content = get_capped(url, MAX_AZURE_BYTES, timeout=REQUEST_TIMEOUT)
         change_number = json.loads(content)["changeNumber"]
         if change_number > highest_change_number:
             highest_change_number = change_number
@@ -273,7 +290,7 @@ def get_azure_ip_ranges_download(
             page_to_search,
             MAX_PAGE_BYTES,
             headers={"User-Agent": "Guardian - GTA5 Firewall"},
-            timeout=30,
+            timeout=REQUEST_TIMEOUT,
         )
 
         # Search through the HTML for all download.microsoft.com JSON files.

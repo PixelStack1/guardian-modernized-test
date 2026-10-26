@@ -3,8 +3,9 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from multiprocessing import Manager, Process
 from multiprocessing.managers import DictProxy, ListProxy
 from typing import TYPE_CHECKING
@@ -177,6 +178,10 @@ KNOWN_SIZES = HEARTBEAT_SIZES.union(MATCHMAKING_SIZES)
 # in case they're useful later on.
 
 
+# VOLONTAIRE — repris tel quel du Guardian d'origine (3.5.0). En mode Liste blanche, cette
+# fonction lit seulement quelques octets d'en-tête de paquets UDP chiffrés pour reconnaître
+# les services Rockstar et les laisser passer. Elle n'enregistre rien, n'affiche rien et ne
+# lit pas le jeu (ni sa mémoire, ni ses fichiers, ni le contenu déchiffré des paquets).
 def is_whitelist_service_packet(payload: bytes) -> bool:
     """
     Heuristic (from upstream 3.5.0) recognising R* service / DTLS-handshake style packets by
@@ -245,12 +250,22 @@ class AbstractPacketFilter(ABC):
     def is_packet_allowed(self, packet: pydivert.Packet) -> bool:
         pass
 
+    def on_started(self) -> None:
+        """Appelé dans le processus de filtrage, une fois le handle WinDivert ouvert."""
+        return None
+
+    def finished(self) -> bool:
+        """True = le filtre a terminé son travail : la boucle s'arrête et le handle
+        WinDivert est fermé (le trafic redevient normal, sans Guardian)."""
+        return False
+
     def run(self) -> None:
         with contextlib.suppress(KeyboardInterrupt):
             self.queue.send(True)
             with open_windivert(
                 priority=self.priority, filter_=packet_filter(self.extra_ports)
             ) as w:
+                self.on_started()
                 for packet in w:
                     decision = self.is_packet_allowed(packet)
                     if decision:
@@ -261,6 +276,9 @@ class AbstractPacketFilter(ABC):
 
                     if self.debug_print_decisions:
                         print(self.construct_debug_packet_info(packet, decision))
+
+                    if self.finished():
+                        break
 
     @staticmethod
     def construct_debug_packet_info(
@@ -294,6 +312,73 @@ class SoloSession(AbstractPacketFilter):
         size = len(packet.payload)
 
         return size in HEARTBEAT_SIZES
+
+
+# « Session publique en hôte au départ » : durée FIXE de la phase solo (secondes).
+# Volontairement non réglable (ni option, ni touche).
+HOST_FIRST_SECONDS = 60
+# Message envoyé par le processus de filtrage quand il est réellement lancé.
+HOST_FIRST_STARTED = "host_first_started"
+# Message envoyé si l'ouverture du handle WinDivert échoue : (HOST_FIRST_FAILED, raison).
+HOST_FIRST_FAILED = "host_first_failed"
+
+
+class HostFirstSession(SoloSession):
+    """Phase 1 (HOST_FIRST_SECONDS) : filtrage SoloSession inchangé (les joins entrants
+    sont jetés). Phase 2 : réouverture automatique, simple transfert sans blocage, puis
+    fermeture du handle WinDivert. Uniquement du drop : aucun paquet créé ni modifié."""
+
+    def __init__(
+        self,
+        priority: int,
+        connection: PipeConnection,
+        session_info: SessionInfo | None = None,
+        debug: bool = False,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        super().__init__(priority, connection, session_info, debug)
+        # Horloge MONOTONE (insensible aux changements d'heure du système).
+        self.clock = clock
+        # On transmet une DURÉE, pas un instant : le processus de filtrage réarme son
+        # propre échéancier au démarrage (run), sans dépendre d'une horloge partagée
+        # entre processus. Le compte à rebours de l'affichage utilise celui-ci.
+        self.duration = float(HOST_FIRST_SECONDS)
+        self.open_at = clock() + self.duration
+
+    def run(self) -> None:
+        self.open_at = self.clock() + self.duration
+        self._started = False
+        try:
+            super().run()
+        except Exception as e:
+            if not self._started:
+                # Handle WinDivert non ouvert : on prévient le menu, qui n'affichera
+                # ni « Session ouverte » ni compte à rebours.
+                with contextlib.suppress(Exception):
+                    self.queue.send((HOST_FIRST_FAILED, f"{type(e).__name__}: {e}"))
+            raise
+
+    def on_started(self) -> None:
+        self._started = True
+        # Filtre réellement actif : l'échéance part de MAINTENANT, et le menu est
+        # prévenu par le Pipe existant (durée restante, pas d'instant d'horloge).
+        self.open_at = self.clock() + self.duration
+        with contextlib.suppress(Exception):
+            self.queue.send((HOST_FIRST_STARTED, self.duration))
+
+    def is_open(self) -> bool:
+        return self.clock() >= self.open_at
+
+    def remaining(self) -> float:
+        return max(0.0, self.open_at - self.clock())
+
+    def is_packet_allowed(self, packet: pydivert.Packet) -> bool:
+        if self.is_open():
+            return True  # phase 2 : session publique normale
+        return super().is_packet_allowed(packet)
+
+    def finished(self) -> bool:
+        return self.is_open()
 
 
 class WhitelistSession(AbstractPacketFilter):
