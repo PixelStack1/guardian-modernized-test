@@ -143,3 +143,42 @@ def test_prompt_keys_use_prompt_and_ignore_bad_input():
     for k in ("b", "p", "d"):
         ls.handle_key(k, ctrl, [], {"203.0.113.5": 9e9}, FakeRecorder(), prompt)
     assert len(asked) == 3 and "203.0.113.5" in asked[2]
+
+
+def test_status_words_colored_green_red_fr_en():
+    from colorama import Fore, Style
+
+    from util import i18n
+
+    try:
+        for lang, on, off in (("fr", "ACTIVÉ", "désactivé"), ("en", "ON", "off")):
+            i18n.set_language(lang, persist=False)
+            assert ls.status_word(True) == Fore.GREEN + on + Style.RESET_ALL
+            assert ls.status_word(False) == Fore.RED + off + Style.RESET_ALL
+            rec = ls.recording_status(True, "x.log")
+            assert rec == Fore.GREEN + on + Style.RESET_ALL + " (x.log)"
+            assert ls.recording_status(False) == ls.status_word(False)
+            ctrl = make_ctrl(auto_block=True)
+            head = ls.render_head(ctrl, ls.recording_status(False))
+            status = next(h for h in head if ls.status_word(True) in h)
+            assert ls.status_word(False) in status  # enregistrement désactivé, rouge
+            total = i18n.t(
+                "live.total_status",
+                minutes=ls.TOTAL_BLOCK_SECONDS // 60,
+                state=ls.status_word(False),
+            )
+            assert total in head and Fore.GREEN not in total
+            # Les codes couleur n'entrent pas dans le calcul de largeur.
+            plain = ls._ANSI.sub("", status)
+            fitted = ls.fit_line(status, 30)
+            assert len(ls._ANSI.sub("", fitted)) == min(29, len(plain))
+    finally:
+        i18n.set_language("fr", persist=False)
+
+
+def test_no_test_version_marker():
+    from util import i18n
+
+    for key in ("live.title", "menu.live"):
+        for text in i18n.STRINGS[key].values():
+            assert "test" not in text.lower()

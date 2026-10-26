@@ -570,6 +570,21 @@ LEVEL_COLORS = {
 }
 
 
+def status_word(enabled: bool) -> str:
+    """Mot d'état (ACTIVÉ/désactivé, ON/off) seul en couleur : vert si actif, rouge
+    sinon. Les séquences ANSI sont ignorées par ``fit_line`` (largeur intacte)."""
+    if enabled:
+        return Fore.GREEN + t("live.on") + Style.RESET_ALL
+    return Fore.RED + t("live.off") + Style.RESET_ALL
+
+
+def recording_status(active: bool, path: str = "") -> str:
+    """État de l'enregistrement pour l'en-tête (seul le mot d'état est coloré)."""
+    if active:
+        return t("live.rec_on", on=status_word(True), path=path)
+    return status_word(False)
+
+
 def render_head(
     ctrl: LiveSessionController, recording: str, players: PlayerCounter | None = None
 ) -> list[str]:
@@ -579,14 +594,14 @@ def render_head(
         t(
             "live.status",
             days=AUTO_BLOCK_SECONDS // 86400,
-            auto=t("live.on") if ctrl.auto_block else t("live.off"),
+            auto=status_word(ctrl.auto_block),
             hint="" if ctrl.auto_block else t("live.auto_hint"),
             rec=recording,
         ),
         t(
             "live.total_status",
             minutes=TOTAL_BLOCK_SECONDS // 60,
-            state=t("live.on") if ctrl.total_block else t("live.off"),
+            state=status_word(ctrl.total_block),
         ),
         t("live.total_warning"),
         *(
@@ -1114,7 +1129,9 @@ def live_view(
                 return "q"
             ctrl, rec_obj = session.ctrl, session.recorder
             rec = (
-                t("live.rec_on", path=rec_obj.path) if rec_obj.active else t("live.off")
+                recording_status(True, rec_obj.path)
+                if rec_obj.active
+                else recording_status(False)
             )
             cols, lines_ = shutil.get_terminal_size((120, 30))
             with session.lock:

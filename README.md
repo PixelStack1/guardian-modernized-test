@@ -194,9 +194,9 @@ n'est ni lu ni modifié.
 nécessaire pour créer la session. Une fois hôte, **les nouveaux joueurs qui arrivent ne te retirent
 pas l'hôte** (l'hôte ne change que s'il quitte la session).
 
-## Session en direct (version de test)
+## Session en direct
 
-**Français** — Fonction expérimentale, non publiée. Menu principal → *Session en direct (test)*.
+**Français** — Menu principal → *Session en direct*.
 
 - Tableau des pairs connectés : pays avec drapeau (ex. `🇫🇷 FR`, `—` si IP privée ou inconnue),
   heure de première apparition, paquets/s, octets/s, taille moyenne et max (fenêtre glissante de 3 s).
