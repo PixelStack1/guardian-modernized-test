@@ -2,6 +2,7 @@
 
 import logging
 
+import pytest
 from guardian.menu import livesession as ls
 from guardian.network.anomaly import SessionMonitor
 from guardian.util import i18n
@@ -297,21 +298,51 @@ def test_saturation_logged_once_and_rearmed(caplog):
     assert len([r for r in caplog.records if "satur" in r.getMessage()]) == 1
 
 
-def test_seen_is_constant_time_operations():
-    """seen() ne parcourt jamais le dict (O(1)) : pas d'itération complète."""
+class Tracking(dict):
+    """dict qui compte chaque élément réellement renvoyé par un parcours."""
 
-    class Tracking(dict):
-        iters = 0
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.reads = 0
 
-        def __iter__(self):
-            Tracking.iters += 1
-            return super().__iter__()
+    def _count(self, it):
+        for x in it:
+            self.reads += 1
+            yield x
 
+    def __iter__(self):
+        return self._count(super().__iter__())
+
+    def keys(self):
+        return self._count(super().keys())
+
+    def items(self):
+        return self._count(super().items())
+
+    def values(self):
+        return self._count(super().values())
+
+
+def _reads_after_100(seen):
     c = ls.PlayerCounter(max_players=4, clock=Mono())
     c.last_seen = Tracking()
     for i in range(100):
-        c.seen(f"198.51.100.{i}")
-    assert Tracking.iters <= 96  # exactement un next(iter()) par éviction (100 - 4)
+        seen(c, f"198.51.100.{i}")
+    return c.last_seen.reads
+
+
+def test_seen_is_constant_time_operations():
+    """seen() ne parcourt jamais le dict (O(1)) : un seul élément lu par éviction."""
+    assert _reads_after_100(ls.PlayerCounter.seen) <= 96  # 100 - 4 évictions
+
+
+@pytest.mark.parametrize("scan", ["items", "keys", "values"])
+def test_tracking_helper_detects_full_traversal(scan):
+    def bad_seen(self, ip):
+        list(getattr(self.last_seen, scan)())  # parcours complet (mauvais)
+        ls.PlayerCounter.seen(self, ip)
+
+    assert _reads_after_100(bad_seen) > 96
 
 
 def test_total_block_read_error_defaults_to_off():
