@@ -133,3 +133,17 @@ sc stop WinDivert
 
 User data (`data.json`, `db.json`, `history.log`, `debugger.log`) is stored in
 `%LOCALAPPDATA%\Guardian` (legacy files in the working directory are copied there once).
+
+## Hardening
+
+- **WinDivert integrity**: at startup Guardian hashes `WinDivert64.dll` and `WinDivert64.sys` from its own
+  package directory and refuses to start unless they match the official basil00 WinDivert 2.2.2-A release
+  (`c1e060ee…d7d9a2` / `8da08533…90ddc2`). The DLL is loaded by absolute path; the current directory is
+  removed from the DLL search order.
+- **Strict filter**: UDP to 6672 and 61455-61458 only. The extra ports can be disabled with
+  `"extra_ports": false` in `%LOCALAPPDATA%\Guardian\data.json`. On 61455-61458 the payload-size
+  heuristics (observed on 6672 only) are not used and Rockstar/Take-Two ranges are never blocked.
+  These extra ports still need to be validated in real GTA Online sessions.
+  If the filter cannot be opened, Guardian exits cleanly with a message.
+- **IP lists**: the last good RIPE/Azure lists are cached; a new list that is empty, malformed or more than
+  30% different from the previous one is rejected and the previous list is kept.

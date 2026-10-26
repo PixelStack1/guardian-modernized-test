@@ -4,6 +4,7 @@ import contextlib
 import logging
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from multiprocessing import Manager, Process
 from multiprocessing.managers import DictProxy, ListProxy
 from typing import TYPE_CHECKING
@@ -12,7 +13,8 @@ import pydivert
 
 from network.sessioninfo import SessionInfo
 from util.console import get_original_console_title, set_console_title
-from util.network import ip_in_cidr_block_set
+from util.dynamicblacklist import T2_EU_FALLBACK, T2_US_FALLBACK
+from util.network import construct_cidr_block_set, ip_in_cidr_block_set
 from util.types import CIDR_BLOCK
 
 if TYPE_CHECKING:
@@ -66,7 +68,78 @@ ipfilter = re.compile(r"^(185\.56\.6[4-7]\.\d{1,3})$")
 # and parts of the filter logic (in the Whitelist class) that use the packet.ip attribute should be changed.
 
 # PACKET_FILTER = "udp.SrcPort == 6672 or udp.DstPort == 6672 and ip"
-PACKET_FILTER = "udp.DstPort == 6672 and udp.PayloadLength > 0 and ip"
+GTA_PORT = 6672
+# Rockstar's documented extra GTA Online UDP ports. The payload-size heuristics (heartbeat / matchmaking)
+# were only observed on 6672, so on these ports Rockstar/Take-Two ranges are never blocked and the
+# size heuristics are not applied. Can be disabled with "extra_ports": false in data.json.
+EXTRA_PORTS = frozenset(range(61455, 61459))
+ALL_PORTS = frozenset({GTA_PORT}) | EXTRA_PORTS
+
+PACKET_FILTER_6672_ONLY = "udp and udp.DstPort == 6672 and udp.PayloadLength > 0 and ip"
+PACKET_FILTER = (
+    "udp and (udp.DstPort == 6672 or (udp.DstPort >= 61455 and udp.DstPort <= 61458))"
+    " and udp.PayloadLength > 0 and ip"
+)
+
+
+def packet_filter(extra_ports: bool = True) -> str:
+    """Strict filter: UDP to exactly 6672 (+ 61455-61458 if enabled), nothing else."""
+    return PACKET_FILTER if extra_ports else PACKET_FILTER_6672_ONLY
+
+
+def extra_ports_enabled() -> bool:
+    """Config option "extra_ports" (default True). Any config error -> default."""
+    try:
+        from config.configdata import ConfigData
+
+        return bool(ConfigData().data.get("extra_ports", True))
+    except Exception:
+        return True
+
+
+ROCKSTAR_BLOCKS: set[CIDR_BLOCK] = construct_cidr_block_set(
+    sorted(T2_EU_FALLBACK | T2_US_FALLBACK)
+)
+
+
+def is_rockstar_ip(ip: str) -> bool:
+    return ip_in_cidr_block_set(ip, ROCKSTAR_BLOCKS)
+
+
+def is_extra_port(packet: pydivert.Packet) -> bool:
+    return packet.dst_port in EXTRA_PORTS
+
+
+class FilterOpenError(Exception):
+    """The WinDivert handle could not be opened with the packet filter."""
+
+
+@contextlib.contextmanager
+def open_windivert(
+    flags: pydivert.Flag | None = None, priority: int = 0, filter_: str = PACKET_FILTER
+) -> Iterator[pydivert.WinDivert]:
+    """Open a WinDivert handle on the strict filter; any open failure -> FilterOpenError."""
+    try:
+        handle = pydivert.WinDivert(
+            filter_, priority=priority, flags=flags or pydivert.Flag.DEFAULT
+        )
+        handle.open()
+    except Exception as e:
+        raise FilterOpenError(
+            f"WinDivert open failed for filter {filter_!r}: {e}"
+        ) from e
+    try:
+        yield handle
+    finally:
+        if handle.is_open:
+            handle.close()
+
+
+def probe_filter(extra_ports: bool = True) -> None:
+    """Open and immediately close a sniff handle to validate filter + driver at startup."""
+    with open_windivert(pydivert.Flag.SNIFF, filter_=packet_filter(extra_ports)):
+        pass
+
 
 # Based on network observation, the payload sizes of packets which are probably some sort of heartbeat (and therefore
 # should be let through so the session stays online), or a matchmaking request (and therefore should be let through so we
@@ -150,6 +223,7 @@ class AbstractPacketFilter(ABC):
         self.process = Process(target=self.run, daemon=True)
         self.session_info = session_info
         self.debug_print_decisions = debug
+        self.extra_ports = extra_ports_enabled()
 
     def __str__(self) -> str:
         return f"{self.__class__.__name__} with priority {self.priority}"
@@ -172,7 +246,9 @@ class AbstractPacketFilter(ABC):
     def run(self) -> None:
         with contextlib.suppress(KeyboardInterrupt):
             self.queue.send(True)
-            with pydivert.WinDivert(PACKET_FILTER, priority=self.priority) as w:
+            with open_windivert(
+                priority=self.priority, filter_=packet_filter(self.extra_ports)
+            ) as w:
                 for packet in w:
                     decision = self.is_packet_allowed(packet)
                     if decision:
@@ -210,6 +286,9 @@ class SoloSession(AbstractPacketFilter):
         super().__init__(set(), priority, connection, session_info, debug)
 
     def is_packet_allowed(self, packet: pydivert.Packet) -> bool:
+        if is_extra_port(packet):
+            # No size heuristics on 61455-61458: only Rockstar/T2 servers get through.
+            return is_rockstar_ip(packet.ip.src_addr)
         size = len(packet.payload)
 
         return size in HEARTBEAT_SIZES
@@ -236,14 +315,15 @@ class WhitelistSession(AbstractPacketFilter):
         ip = packet.ip.src_addr
         size = len(packet.payload)
 
+        if is_extra_port(packet):
+            return ip in self.ips or is_rockstar_ip(ip)
+
         # The "special sauce" for the new filtering logic. We're using payload sizes to guess if the packet
         # has a behaviour we want to allow through.
         if ip in self.ips or size in HEARTBEAT_SIZES:
             return True
 
         return is_whitelist_service_packet(bytes(packet.payload))
-
-        return False
 
 
 class BlacklistSession(AbstractPacketFilter):
@@ -275,7 +355,11 @@ class BlacklistSession(AbstractPacketFilter):
         ip = packet.ip.src_addr
         size = len(packet.payload)
 
-        if ip in self.known_allowed or size in KNOWN_SIZES:
+        if is_extra_port(packet) and is_rockstar_ip(ip):
+            return True
+        if ip in self.known_allowed or (
+            not is_extra_port(packet) and size in KNOWN_SIZES
+        ):
             return True
         elif ip not in self.ips:
             # If it's not directly blacklisted it might be in a blacklisted range
@@ -307,6 +391,9 @@ class LockedSession(AbstractPacketFilter):
         super().__init__(set(), priority, connection, session_info, debug)
 
     def is_packet_allowed(self, packet: pydivert.Packet) -> bool:
+        if is_extra_port(packet):
+            # Matchmaking sizes were only observed on 6672: never block on extra ports.
+            return True
         size = len(packet.payload)
 
         # No new matchmaking requests allowed.
@@ -322,6 +409,7 @@ class DebugSession:
     """
 
     def __init__(self, ips: set[str], priority: int):
+        self.extra_ports = extra_ports_enabled()
         self.ips = ips
         self.priority = priority
         self.process = Process(target=self.run, daemon=True)
@@ -334,8 +422,8 @@ class DebugSession:
 
     def run(self) -> None:
         debug_logger.debug("Started debugging")
-        with pydivert.WinDivert(
-            PACKET_FILTER, priority=self.priority, flags=pydivert.Flag.SNIFF
+        with open_windivert(
+            pydivert.Flag.SNIFF, self.priority, packet_filter(self.extra_ports)
         ) as w:
             for packet in w:
                 dst = packet.ip.dst_addr
@@ -417,6 +505,7 @@ class IPCollector:
     """
 
     def __init__(self, priority: int, packet_count_min_threshold: int = 1):
+        self.extra_ports = extra_ports_enabled()
         self.priority = priority
         self.process = Process(target=self.run, daemon=True)
         self.ips: ListProxy[str] = Manager().list()
@@ -453,8 +542,8 @@ class IPCollector:
         # TODO: We could also actually check to see *when* the last packet was seen from that IP.
         with (
             contextlib.suppress(KeyboardInterrupt),
-            pydivert.WinDivert(
-                PACKET_FILTER, priority=self.priority, flags=pydivert.Flag.SNIFF
+            open_windivert(
+                pydivert.Flag.SNIFF, self.priority, packet_filter(self.extra_ports)
             ) as w,
         ):
             for packet in w:

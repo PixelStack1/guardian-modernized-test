@@ -1,10 +1,15 @@
 import ctypes
+import os
 import struct
 import sys
+import tempfile
 from unittest import mock
 
 import pydivert
 import pytest
+
+# Never write user data (data.json, caches, logs) outside a temp dir during tests.
+os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="guardian-tests-")
 
 # Guardian is Windows-only; on other OSes stub the Win32 console APIs so modules import.
 if sys.platform != "win32" and not hasattr(ctypes, "WinDLL"):

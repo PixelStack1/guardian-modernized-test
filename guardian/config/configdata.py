@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Literal, TypedDict, TypeVar
+from typing import Any, Literal, NotRequired, TypedDict, TypeVar
 
 from util.paths import data_file
 from util.singleton import Singleton
@@ -12,6 +12,7 @@ T = TypeVar("T", bound=dict[str, str])
 class ConfigDataType(TypedDict):
     blacklist: dict[str, str]
     whitelist: dict[str, str]
+    extra_ports: NotRequired[bool]
 
 
 class ConfigData(metaclass=Singleton):
@@ -23,7 +24,7 @@ class ConfigData(metaclass=Singleton):
         if self.data_file.is_file():
             self.load()
         else:
-            self.data = {"blacklist": {}, "whitelist": {}}
+            self.data = {"blacklist": {}, "whitelist": {}, "extra_ports": True}
             self.save()
 
     def load(self) -> None:

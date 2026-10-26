@@ -2,6 +2,8 @@ import time
 import traceback
 from pathlib import Path
 
+from util.paths import data_file
+
 
 def crash_report(
     exception: Exception,
@@ -11,7 +13,8 @@ def crash_report(
     if filename is None:
         filename = f"crashreport_{hex(int(time.time_ns()))[2:]}.log"
 
-    with Path(filename).open("w") as handle:
+    path = Path(filename) if Path(filename).is_absolute() else data_file(filename)
+    with path.open("w") as handle:
         handle.write(
             f"Report local time: {time.asctime(time.localtime())}\nReport UTC time:   {time.asctime(time.gmtime())}\n\n"
         )
