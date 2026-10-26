@@ -15,6 +15,8 @@ class ConfigDataType(TypedDict):
     extra_ports: NotRequired[bool]
     # Vue Session en direct : bouclier auto 7 jours des IP rouges (auto_block.json) (DÉSACTIVÉ si absent, phase de test).
     auto_block_suspect: NotRequired[bool]
+    # Vue Session en direct : blocage total (coupe aussi le sortant 10 min). DÉSACTIVÉ si absent.
+    total_block: NotRequired[bool]
     # Langue de l'interface : « fr » (par défaut) ou « en ».
     language: NotRequired[str]
 

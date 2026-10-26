@@ -286,9 +286,32 @@ STRINGS: dict[str, dict[str, str]] = {
     "live.no_peers": {"fr": "(aucun pair connecté)", "en": "(no connected peer)"},
     "live.keys": {
         "fr": "[B] Bloquer  [P] Pseudo  [D] Débloquer  [A] Bouclier auto  "
-        "[E] Enregistrement  [Q] Retour",
+        "[T] Blocage total  [E] Enregistrement  [Q] Retour",
         "en": "[B] Block  [P] Nickname  [D] Unblock  [A] Auto shield  "
-        "[E] Recording  [Q] Back",
+        "[T] Total block  [E] Recording  [Q] Back",
+    },
+    "live.total_status": {
+        "fr": "Blocage total (coupe aussi l'envoi vers l'IP bloquée, {minutes} min) : {state}  [T]",
+        "en": "Total block (also cuts sending to the blocked IP, {minutes} min): {state}  [T]",
+    },
+    "live.total_warning": {
+        "fr": "  ⚠ Coupe seulement la liaison entre toi et ce joueur, pas un kick garanti de la "
+        "session ; si ce joueur est l'hôte, c'est toi qui peux être éjecté.",
+        "en": "  ⚠ Only cuts the link between you and this player, not a guaranteed kick from "
+        "the session; if this player is the host, you may be the one dropped.",
+    },
+    "live.blocked_total": {"fr": "BLOQUÉE ⇄", "en": "BLOCKED ⇄"},
+    "live.ev.total": {
+        "fr": "Blocage total : envoi vers {ip} coupé pour {minutes} min",
+        "en": "Total block: sending to {ip} cut for {minutes} min",
+    },
+    "live.ev.total_skipped": {
+        "fr": "Blocage total : {ip} protégée (liste blanche / Rockstar / Azure), envoi non coupé",
+        "en": "Total block: {ip} is protected (whitelist / Rockstar / Azure), sending not cut",
+    },
+    "live.ev.total_expired": {
+        "fr": "Blocage total de {ip} terminé (le blocage entrant continue)",
+        "en": "Total block of {ip} ended (inbound block continues)",
     },
     "live.blocked": {"fr": "BLOQUÉE", "en": "BLOCKED"},
     "live.blocked_days": {"fr": "BLOQUÉE {d} j", "en": "BLOCKED {d} d"},

@@ -37,6 +37,12 @@ LIVE_PRIORITY = 1000
 # Durée d'un blocage automatique (secondes) : 7 jours, persistant dans
 # auto_block.json (séparé de data.json), levé avant terme avec la touche D.
 AUTO_BLOCK_SECONDS = 7 * 24 * 3600
+# Mode « blocage total » : durée de la coupure SORTANTE vers une IP bloquée
+# (en mémoire, jamais persistée). Ensuite seul le blocage entrant continue.
+TOTAL_BLOCK_SECONDS = 600
+# Clé de data.json du mode blocage total (DÉSACTIVÉ si absente).
+TOTAL_BLOCK_KEY = "total_block"
+TOTAL_BLOCK_DEFAULT = False
 # Clé de data.json du bouclier auto (IP rouges uniquement). ACTIVÉ si absente.
 # Les IP orange ne sont jamais bloquées automatiquement (bouclier manuel).
 AUTO_BLOCK_KEY = "auto_block_suspect"
@@ -66,10 +72,56 @@ def is_blocked(blocked: MutableMapping[str, float], ip: str, now: float) -> bool
     return expiry == PERMANENT or now < expiry
 
 
+def should_drop(
+    inbound: bool,
+    src: str,
+    dst: str,
+    blocked: MutableMapping[str, float],
+    total: MutableMapping[str, float],
+    now: float,
+) -> bool:
+    """Décision par paquet (aucune modification, aucune création de paquet).
+
+    Entrant : rejeté si la source est bloquée. Sortant : rejeté UNIQUEMENT si la
+    destination exacte est en coupure sortante (mode blocage total) et toujours
+    bloquée en entrant. En cas d'erreur, le paquet passe (fail-safe)."""
+    try:
+        if inbound:
+            return is_blocked(blocked, src, now)
+        expiry = total.get(dst)
+        return expiry is not None and now < expiry and is_blocked(blocked, dst, now)
+    except Exception:
+        return False
+
+
+def handle_packet(
+    w: Any,
+    packet: Any,
+    blocked: MutableMapping[str, float],
+    total: MutableMapping[str, float],
+    now: float,
+) -> bool:
+    """Réinjecte le paquet ORIGINAL tel quel (``w.send(packet)``) ou le jette.
+    Renvoie True si envoyé. Jamais de paquet fabriqué ni modifié."""
+    try:
+        inbound = bool(packet.is_inbound)
+        outbound = bool(packet.is_outbound)
+        drop = (inbound or outbound) and should_drop(
+            inbound, packet.ip.src_addr, packet.ip.dst_addr, blocked, total, now
+        )
+    except Exception:
+        drop = False
+    if drop:
+        return False
+    w.send(packet)
+    return True
+
+
 def capture_loop(
     blocked: MutableMapping[str, float],
     out: Queue[Packet],
     extra_ports: bool,
+    total_blocked: MutableMapping[str, float] | None = None,
 ) -> None:  # pragma: no cover - nécessite Windows + WinDivert
     from network.sessions import open_windivert, packet_filter
 
@@ -80,6 +132,7 @@ def capture_loop(
         # Copie locale de la liste partagée, rafraîchie toutes les BLOCKLIST_REFRESH s :
         # évite un aller-retour inter-processus par paquet (latence en jeu).
         local: dict[str, float] = dict(blocked)
+        local_total: dict[str, float] = {}
         next_refresh = 0.0
         for packet in w:
             inbound = bool(packet.is_inbound)
@@ -87,9 +140,9 @@ def capture_loop(
             now = time.time()
             if now >= next_refresh:
                 local = dict(blocked)
+                local_total = dict(total_blocked) if total_blocked is not None else {}
                 next_refresh = now + BLOCKLIST_REFRESH
-            if not (inbound and is_blocked(local, ip, now)):
-                w.send(packet)
+            handle_packet(w, packet, local, local_total, now)
             with contextlib.suppress(queue.Full):
                 port = packet.src_port if inbound else packet.dst_port
                 out.put_nowait((now, ip, len(packet.payload), inbound, int(port or 0)))
@@ -137,6 +190,8 @@ class LiveSessionController:
         auto_block_available: bool = True,
         auto_store: Any = None,
         auto_entries: dict[str, float] | None = None,
+        total_block: bool = TOTAL_BLOCK_DEFAULT,
+        total_blocked: MutableMapping[str, float] | None = None,
     ) -> None:
         self.blocked = blocked
         # reporter(ip, type « auto »/« manual », pseudo) : rapport d'incident à chaque blocage.
@@ -150,6 +205,11 @@ class LiveSessionController:
         self._guard_reported: set[str] = set()
         self.blacklist = blacklist
         self.auto_block = auto_block
+        # Mode blocage total : coupe aussi le SORTANT vers l'IP bloquée, 10 min, en mémoire.
+        self.total_blocked: MutableMapping[str, float] = (
+            total_blocked if total_blocked is not None else {}
+        )
+        self.total_block = total_block and auto_block_available
         self.clock = clock
         self.pseudos: dict[str, str] = {}
         self.events: list[str] = []
@@ -169,6 +229,22 @@ class LiveSessionController:
                 self.auto_entries[ip] = expiry
                 self.blocked[ip] = expiry
 
+    def _cut_outbound(self, ip: str) -> None:
+        """Coupure sortante (blocage total) si autorisée ; mêmes garde-fous que l'auto."""
+        if not (self.total_block and self.auto_block_available):
+            return
+        try:
+            if self.auto_block_guard(ip):
+                self.events.append(t("live.ev.total_skipped", ip=ip))
+                return
+        except Exception:
+            return
+        self.total_blocked[ip] = self.clock() + TOTAL_BLOCK_SECONDS
+        self.events.append(t("live.ev.total", ip=ip, minutes=TOTAL_BLOCK_SECONDS // 60))
+
+    def toggle_total_block(self) -> None:
+        self.total_block = self.auto_block_available and not self.total_block
+
     def _persist(self) -> None:
         if self.auto_store is not None:
             with contextlib.suppress(Exception):
@@ -184,6 +260,7 @@ class LiveSessionController:
         self.blacklist.add(ip, blacklist_label(pseudo, datetime.now()))
         self.blacklist.save()
         self.events.append(t("live.ev.blocked", ip=ip))
+        self._cut_outbound(ip)
         self._report(ip, "manual", pseudo)
 
     def _report(self, ip: str, kind: str, pseudo: str) -> None:
@@ -232,11 +309,13 @@ class LiveSessionController:
                 days=AUTO_BLOCK_SECONDS // 86400,
             )
         )
+        self._cut_outbound(peer.ip)
         self._report(peer.ip, "auto", self.pseudos.get(peer.ip, ""))
         return True
 
     def unblock(self, ip: str, remove_from_blacklist: bool = True) -> None:
         self.blocked.pop(ip, None)
+        self.total_blocked.pop(ip, None)
         if self.auto_entries.pop(ip, None) is not None:
             self._persist()
         if remove_from_blacklist and ip in self.blacklist:
@@ -250,6 +329,10 @@ class LiveSessionController:
             if expiry != PERMANENT and now >= expiry:
                 self.blocked.pop(ip, None)
                 self.events.append(t("live.ev.expired", ip=ip))
+        for ip, expiry in list(self.total_blocked.items()):
+            if now >= expiry:
+                self.total_blocked.pop(ip, None)
+                self.events.append(t("live.ev.total_expired", ip=ip))
         expired = [ip for ip, e in self.auto_entries.items() if now >= e]
         for ip in expired:
             del self.auto_entries[ip]
@@ -260,6 +343,8 @@ class LiveSessionController:
         expiry = self.blocked.get(ip)
         if expiry is None:
             return ""
+        if ip in self.total_blocked:
+            return t("live.blocked_total")
         if expiry == PERMANENT:
             return t("live.blocked")
         left = max(0, int(expiry - self.clock()))
@@ -293,6 +378,12 @@ def render(
             hint="" if ctrl.auto_block else t("live.auto_hint"),
             rec=recording,
         ),
+        t(
+            "live.total_status",
+            minutes=TOTAL_BLOCK_SECONDS // 60,
+            state=t("live.on") if ctrl.total_block else t("live.off"),
+        ),
+        t("live.total_warning"),
         *(
             []
             if ctrl.auto_block_available
@@ -355,6 +446,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
     config = ConfigData()
     manager = Manager()
     blocked: MutableMapping[str, float] = manager.dict()
+    total_blocked: MutableMapping[str, float] = manager.dict()
     packets: Queue[Packet] = Queue(QUEUE_MAX)
     from config.globallist import Whitelist
     from menu.menu import Menu  # import tardif : menu.py importe ce module
@@ -381,14 +473,20 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
         reporter=reporter,
         auto_block_available=ranges_ok,
         auto_store=saver,
+        total_block=bool(config.data.get(TOTAL_BLOCK_KEY, TOTAL_BLOCK_DEFAULT)),
+        total_blocked=total_blocked,
         # Lecture une seule fois, avant le démarrage de la capture.
-        auto_entries=autoblock.load(time.time(), guard) if ranges_ok else {},
+        auto_entries=autoblock.load(time.time(), guard, max_seconds=AUTO_BLOCK_SECONDS)
+        if ranges_ok
+        else {},
     )
     if ranges_ok:
         saver.request(ctrl.auto_entries)  # réécrit le fichier purgé/filtré
     recorder = MetadataRecorder()
     proc = Process(
-        target=capture_loop, args=(blocked, packets, extra_ports_enabled()), daemon=True
+        target=capture_loop,
+        args=(blocked, packets, extra_ports_enabled(), total_blocked),
+        daemon=True,
     )
     proc.start()
     try:
@@ -448,6 +546,8 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
                     ctrl.unblock(ips[int(answer) - 1])
             elif key == "a":
                 ctrl.toggle_auto_block()
+            elif key == "t":
+                ctrl.toggle_total_block()
             elif key == "e":
                 if recorder.active:
                     recorder.stop()

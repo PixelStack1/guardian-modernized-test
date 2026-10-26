@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 FILE_NAME = "auto_block.json"
 # Nombre maximal d'entrées conservées (les plus proches de l'expiration partent d'abord).
 MAX_ENTRIES = 5000
+# Durée max d'un blocage chargé (même valeur que AUTO_BLOCK_SECONDS de livesession) :
+# une expiration lointaine/falsifiée est ramenée à now + 7 jours.
+MAX_BLOCK_SECONDS = 7 * 24 * 3600
 
 
 def store_path() -> Path:
@@ -63,6 +66,7 @@ def load(
     guard: Callable[[str], bool] | None = None,
     path: Path | None = None,
     limit: int = MAX_ENTRIES,
+    max_seconds: float = MAX_BLOCK_SECONDS,
 ) -> dict[str, float]:
     """Charge, valide, purge (expirés), filtre (garde-fous) et plafonne. Ne lève jamais."""
     try:
@@ -85,7 +89,7 @@ def load(
                     continue
             except Exception:
                 continue
-        entries[ip] = float(expiry)
+        entries[ip] = min(float(expiry), now + max_seconds)
     return cap(entries, limit)
 
 

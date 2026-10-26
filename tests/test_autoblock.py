@@ -139,7 +139,21 @@ def test_corrupt_or_invalid_file_is_ignored(tmp_path, content):
 def test_valid_entries_kept_next_to_invalid(tmp_path):
     path = tmp_path / "auto_block.json"
     path.write_text(json.dumps({"x": 1, "203.0.113.7": 9e9, "2001:db8::1": 9e9}))
-    assert autoblock.load(1000.0, path=path) == {"203.0.113.7": 9e9, "2001:db8::1": 9e9}
+    week = 1000.0 + 7 * DAY
+    assert autoblock.load(1000.0, path=path) == {
+        "203.0.113.7": week,
+        "2001:db8::1": week,
+    }
+
+
+def test_far_expiry_is_clamped_to_seven_days(tmp_path):
+    path = tmp_path / "auto_block.json"
+    path.write_text(json.dumps({"203.0.113.1": 9e9, "203.0.113.2": 1000.0 + DAY}))
+    out = autoblock.load(1000.0, path=path)
+    assert out == {"203.0.113.1": 1000.0 + 7 * DAY, "203.0.113.2": 1000.0 + DAY}
+    assert autoblock.MAX_BLOCK_SECONDS == ls.AUTO_BLOCK_SECONDS
+    ctrl, _, _ = make(tmp_path, 1000.0)
+    assert ctrl.blocked["203.0.113.1"] == 1000.0 + ls.AUTO_BLOCK_SECONDS
 
 
 def test_unreadable_file_is_ignored(tmp_path):

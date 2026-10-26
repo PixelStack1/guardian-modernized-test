@@ -196,8 +196,19 @@ User data (`data.json`, `db.json`, `history.log`, `debugger.log`) is stored in
 - **Bouclier manuel** (`B`) : bloque n'importe quelle IP choisie et l'écrit **de façon permanente**
   dans la liste noire de `data.json` (avec date et pseudo) ; `D` pour débloquer (retire aussi
   l'IP de la liste noire, ou de `auto_block.json` pour un blocage auto).
+- **Blocage total** (touche `T`, ou `"total_block": true` dans `data.json`) : **désactivé par
+  défaut**. Quand il est actif et qu'une IP est bloquée (bouclier auto rouge ou `B`), Guardian jette
+  **aussi les paquets sortants** vers cette IP précise pendant **10 min** (`TOTAL_BLOCK_SECONDS`,
+  en mémoire, jamais enregistré) ; ensuite seul le blocage entrant habituel continue (7 jours pour
+  l'auto, permanent pour `B`). `D` lève aussi la coupure sortante. Uniquement du rejet : aucun
+  paquet n'est fabriqué, modifié ni envoyé au joueur ; en cas d'erreur, le paquet passe. Aucun
+  trafic supplémentaire n'est capturé : le filtre reste le filtre strict (UDP vers 6672), tout
+  le reste est réinjecté immédiatement. Mêmes garde-fous que le bouclier auto (jamais liste blanche,
+  Rockstar/Take-Two ni Azure ; indisponible si les plages Rockstar/Azure n'ont pas pu être chargées).
+  ⚠️ Cela coupe **seulement la liaison entre toi et ce joueur** ; ce n'est **pas un kick garanti**
+  de toute la session, et **si ce joueur est l'hôte, c'est toi qui peux être éjecté**.
 - Touches : `B` bloquer (immédiat + ajout à la liste noire avec date et pseudo), `P` pseudo,
-  `D` débloquer, `A` bouclier auto, `E` enregistrement, `Q` retour.
+  `D` débloquer, `A` bouclier auto, `T` blocage total, `E` enregistrement, `Q` retour.
 - Enregistrement : uniquement des métadonnées (horodatage, IP, taille, sens), jamais le contenu,
   dans `%LOCALAPPDATA%\Guardian\enregistrements\`. Nouveau fichier tous les 1 000 000 lignes /
   100 Mo, arrêt automatique après 5 fichiers.
