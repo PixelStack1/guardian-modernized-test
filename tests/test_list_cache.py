@@ -1,0 +1,75 @@
+import json
+
+from guardian.util import dynamicblacklist as db
+
+BASE = {f"10.{i}.0.0/16" for i in range(20)}
+
+
+def test_first_valid_list_accepted_and_cached(tmp_path):
+    assert db.accept_list("t", BASE, {"1.1.1.0/24"}, tmp_path) == BASE
+    assert db.load_cached_list("t", tmp_path) == BASE
+
+
+def test_empty_rejected_keeps_old(tmp_path):
+    db.accept_list("t", BASE, set(), tmp_path)
+    assert db.accept_list("t", set(), set(), tmp_path) == BASE
+
+
+def test_malformed_rejected_keeps_old(tmp_path):
+    db.accept_list("t", BASE, set(), tmp_path)
+    assert db.accept_list("t", BASE | {"999.1.1.1/8"}, set(), tmp_path) == BASE
+    assert db.accept_list("t", BASE | {"0.0.0.0/0"}, set(), tmp_path) == BASE
+
+
+def test_change_over_30_percent_rejected(tmp_path):
+    db.accept_list("t", BASE, set(), tmp_path)
+    changed = set(list(sorted(BASE))[:13]) | {
+        f"11.{i}.0.0/16" for i in range(7)
+    }  # 14/20 = 70%
+    assert db.accept_list("t", changed, set(), tmp_path) == BASE
+    assert db.load_cached_list("t", tmp_path) == BASE
+
+
+def test_change_under_30_percent_accepted(tmp_path):
+    db.accept_list("t", BASE, set(), tmp_path)
+    changed = (BASE - {"10.0.0.0/16"}) | {"11.0.0.0/16"}  # 2/20 = 10%
+    assert db.accept_list("t", changed, set(), tmp_path) == changed
+
+
+def test_no_cache_failure_uses_fallback(tmp_path):
+    assert db.accept_list("t", None, {"1.1.1.0/24"}, tmp_path) == {"1.1.1.0/24"}
+
+
+def test_corrupt_cache_ignored(tmp_path):
+    (tmp_path / "cache_t.json").write_text("{not json")
+    assert db.accept_list("t", None, {"1.1.1.0/24"}, tmp_path) == {"1.1.1.0/24"}
+
+
+def test_ripe_rejected_keeps_cached(tmp_path, monkeypatch):
+    db.accept_list("ripe_AS1", BASE, set(), tmp_path)
+    body = json.dumps({"data": {"prefixes": [{"prefix": "1.2.3.0/24"}]}}).encode()
+    monkeypatch.setattr(db, "get_capped", lambda *a, **k: body)
+    assert db.get_announced_prefixes(1, {"9.9.9.0/24"}, cache_dir=tmp_path) == BASE
+
+
+def test_azure_change_over_30_percent_keeps_backup(tmp_path, monkeypatch):
+    def azure(prefixes):
+        return json.dumps(
+            {
+                "values": [
+                    {"name": "AzureCloud", "properties": {"addressPrefixes": prefixes}}
+                ]
+            }
+        ).encode()
+
+    backup = tmp_path / "db.json"
+    backup.write_bytes(azure(sorted(BASE)))
+    monkeypatch.setattr(
+        db, "get_azure_ip_ranges_download", lambda: ("u", azure(["12.0.0.0/16"]))
+    )
+    monkeypatch.setattr(db, "get_t2_ranges", lambda: set())
+    result = db.get_dynamic_blacklist(str(backup))
+    assert len(result) == len(BASE)
+    assert json.loads(backup.read_bytes())["values"][0]["properties"][
+        "addressPrefixes"
+    ] == sorted(BASE)

@@ -10,6 +10,10 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write      # build provenance attestation (this job only)
+      attestations: write
     timeout-minutes: 30
     defaults:
       run:
@@ -83,10 +87,28 @@ jobs:
           if ($p.ExitCode -ne 0) { exit 1 }
           "OK: WinDivert not running after Guardian exit" | Tee-Object -Append logs/exe_exit_driver.txt
           exit 0  # sc.exe query leaves $LASTEXITCODE=1060 when the service is absent (= success here)
+      - name: SHA256SUMS of the exe
+        if: always()
+        run: |
+          Get-ChildItem dist/Guardian-*.exe | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } | Out-File -Encoding ascii dist/SHA256SUMS
+          Get-Content dist/SHA256SUMS | Tee-Object logs/sha256sums.txt
+      - name: Build provenance attestation
+        id: attest
+        if: always()
+        continue-on-error: true  # private repos may need a paid plan; outcome reported below, never faked
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/Guardian-*.exe
+      - name: Report attestation outcome
+        if: always()
+        run: |
+          "attestation outcome: ${{ steps.attest.outcome }}" | Tee-Object logs/attestation.txt
+          "attestation url: ${{ steps.attest.outputs.attestation-url }}" | Tee-Object -Append logs/attestation.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: guardian-windows-results
           path: |
             dist/Guardian-*.exe
+            dist/SHA256SUMS
             logs/

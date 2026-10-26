@@ -1,3 +1,4 @@
+import contextlib
 import json
 import re
 import time
@@ -5,7 +6,7 @@ from pathlib import Path
 
 import requests
 
-from util.network import construct_cidr_block_set
+from util.network import cidr_to_tuple, construct_cidr_block_set
 from util.paths import data_file
 from util.types import CIDR_BLOCK
 
@@ -79,14 +80,91 @@ AS_T2_EU = 202021
 AS_T2_US = 46555
 
 
+MAX_LIST_CHANGE_RATIO = 0.30
+
+
+class ListRejected(ValueError):
+    """A freshly downloaded IP list failed validation; the last good list is kept."""
+
+
+def _cache_path(name: str, cache_dir: Path | None) -> Path:
+    return (
+        (cache_dir / f"cache_{name}.json")
+        if cache_dir
+        else data_file(f"cache_{name}.json")
+    )
+
+
+def load_cached_list(name: str, cache_dir: Path | None = None) -> set[str] | None:
+    try:
+        data = json.loads(_cache_path(name, cache_dir).read_text())
+        prefixes = data["prefixes"]
+        if not isinstance(prefixes, list) or not all(
+            isinstance(x, str) for x in prefixes
+        ):
+            return None
+        return set(prefixes)
+    except Exception:
+        return None
+
+
+def validate_list(new: set[str], old: set[str] | None) -> None:
+    """Raise ListRejected if new is empty, malformed, or differs from old by more than 30%."""
+    if not new:
+        raise ListRejected("empty list")
+    for prefix in new:
+        try:
+            cidr_to_tuple(prefix)
+        except (ValueError, IndexError, TypeError, AttributeError) as e:
+            raise ListRejected(f"malformed prefix {prefix!r}") from e
+    if old:
+        ratio = len(old ^ new) / len(old)
+        if ratio > MAX_LIST_CHANGE_RATIO:
+            raise ListRejected(
+                f"list changed by {ratio:.0%} (> {MAX_LIST_CHANGE_RATIO:.0%})"
+            )
+
+
+def accept_list(
+    name: str, new: set[str] | None, fallback: set[str], cache_dir: Path | None = None
+) -> set[str]:
+    """Return new (and cache it) if valid, else the last good cached list, else fallback."""
+    old = load_cached_list(name, cache_dir)
+    if new is not None:
+        try:
+            validate_list(new, old)
+        except ListRejected as e:
+            print(f"WARNING: rejected new {name} list ({e}); keeping previous list.")
+        else:
+            with contextlib.suppress(OSError):
+                _cache_path(name, cache_dir).write_text(
+                    json.dumps({"saved": time.time(), "prefixes": sorted(new)})
+                )
+            return set(new)
+    return set(old) if old else set(fallback)
+
+
+def parse_ripe_prefixes(body: bytes | str) -> set[str]:
+    """Parse a RIPEstat announced-prefixes answer; IPv4 only. Raises ValueError on bad structure."""
+    try:
+        entries = json.loads(body)["data"]["prefixes"]
+        prefixes = {entry["prefix"] for entry in entries}
+    except (KeyError, TypeError, ValueError) as e:
+        raise ValueError(f"malformed RIPEstat answer: {e}") from e
+    if not all(isinstance(p, str) for p in prefixes):
+        raise ValueError("non-string prefix")
+    return {p for p in prefixes if ":" not in p}  # Guardian is IPv4-only
+
+
 def get_announced_prefixes(
-    asn: int, fallback: set[str], timeout: float = 10
+    asn: int, fallback: set[str], timeout: float = 10, cache_dir: Path | None = None
 ) -> set[str]:
     """
     Query RIPEstat for the prefixes announced by an AS. Replaces the `prsw` library, which broke when
-    RIPEstat added new fields to its responses (upstream issue #163). Never raises: any error returns
-    the static fallback.
+    RIPEstat added new fields to its responses (upstream issue #163). Never raises: any error or
+    rejected list returns the last good cached list, else the static fallback.
     """
+    new: set[str] | None
     try:
         body = get_capped(
             RIPESTAT_URL,
@@ -95,14 +173,10 @@ def get_announced_prefixes(
             headers={"User-Agent": "Guardian - GTA5 Firewall"},
             timeout=timeout,
         )
-        prefixes = {
-            entry["prefix"]
-            for entry in json.loads(body)["data"]["prefixes"]
-            if ":" not in entry["prefix"]  # Guardian is IPv4-only
-        }
-        return prefixes or set(fallback)
+        new = parse_ripe_prefixes(body)
     except Exception:
-        return set(fallback)
+        new = None
+    return accept_list(f"ripe_AS{asn}", new, fallback, cache_dir)
 
 
 def get_t2_ranges() -> set[str]:
@@ -191,21 +265,32 @@ def azure_file_add_timestamp(azure_file_contents: bytes, filename: str) -> bytes
     return b"".join(as_list)
 
 
+def ipv4_only(ranges: list[str]) -> list[str]:
+    return [r for r in ranges if ":" not in r]
+
+
 def parse_azure_ip_ranges(azure_file_contents: bytes) -> list[str]:
-    # TODO: Type the json output
-    azure_cloud_json = json.loads(azure_file_contents)
-    categories = azure_cloud_json["values"]
-    arr_ranges = next(
-        (
-            cat["properties"]["addressPrefixes"]
-            for cat in categories
-            if cat["name"] == "AzureCloud"
-        ),
-        None,
-    )
+    """Parse the Azure service-tags JSON. Raises ValueError on any malformed structure."""
+    try:
+        azure_cloud_json = json.loads(azure_file_contents)
+        categories = azure_cloud_json["values"]
+        arr_ranges = next(
+            (
+                cat["properties"]["addressPrefixes"]
+                for cat in categories
+                if cat["name"] == "AzureCloud"
+            ),
+            None,
+        )
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
+        raise ValueError(f"malformed Azure file: {e}") from e
     if arr_ranges is None:
         raise ValueError("Could not find AzureCloud category in values array.")
-    return arr_ranges  # type: ignore[no-any-return]
+    if not isinstance(arr_ranges, list) or not all(
+        isinstance(r, str) for r in arr_ranges
+    ):
+        raise ValueError("addressPrefixes is not a list of strings")
+    return list(arr_ranges)
 
 
 def get_dynamic_blacklist(backup_file: str | None = None) -> set[CIDR_BLOCK]:
@@ -217,6 +302,15 @@ def get_dynamic_blacklist(backup_file: str | None = None) -> set[CIDR_BLOCK]:
     try:
         download_link, content = get_azure_ip_ranges_download()
         ranges = parse_azure_ip_ranges(content)
+        previous = None
+        if backup_path.is_file():
+            with contextlib.suppress(Exception):
+                previous = set(
+                    ipv4_only(parse_azure_ip_ranges(backup_path.read_bytes()))
+                )
+        validate_list(
+            set(ipv4_only(ranges)), previous
+        )  # raises ListRejected -> keep backup
         backup_path.write_bytes(azure_file_add_timestamp(content, download_link))
     except Exception as e:
         print("ERROR: Could not parse Azure ranges from URL. Reason: ", e)

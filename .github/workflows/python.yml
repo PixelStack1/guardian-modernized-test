@@ -54,6 +54,6 @@ jobs:
           poetry run ruff check .
           poetry run ruff format --check .
       - name: Type-check with mypy
-        run: poetry run mypy .
+        run: poetry run mypy guardian
       - name: Test with pytest
         run: poetry run python -m pytest

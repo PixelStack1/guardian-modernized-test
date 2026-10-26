@@ -6,8 +6,10 @@ from multiprocessing import freeze_support
 import pydivert
 
 from menu.menu import Menu
+from network.sessions import FilterOpenError, extra_ports_enabled, probe_filter
 from util.crash import crash_report
 from util.driver import DriverLifecycle
+from util.integrity import IntegrityError, secure_windivert
 from util.paths import data_file
 from util.printer import print_white
 
@@ -49,8 +51,22 @@ if __name__ == "__main__":
             input("Press enter to exit.")
             sys.exit()
         print_white("Initialising...")
+        try:
+            hashes = secure_windivert()
+        except IntegrityError as e:
+            print_white(f"Refusing to start: WinDivert integrity check failed ({e})")
+            logger.error("WinDivert integrity check failed: %s", e)
+            sys.exit(3)
+        logger.info("WinDivert binaries verified: %s", hashes)
         driver = DriverLifecycle(pydivert.WinDivert)
         driver.start()
+        try:
+            probe_filter(extra_ports_enabled())
+        except FilterOpenError as e:
+            print_white(f"Could not open the WinDivert filter, exiting cleanly: {e}")
+            logger.error("WinDivert filter open failed: %s", e)
+            driver.cleanup()
+            sys.exit(4)
         ctypes.windll.kernel32.SetConsoleTitleW(f"Guardian {__version__}")
     except Exception as e:
         crash_report(e, "Guardian crashed before reaching main()")

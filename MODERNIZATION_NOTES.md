@@ -24,3 +24,12 @@ Hard limit respected: pure WinDivert network filter on inbound UDP/6672. No acce
 6. urllib3 2.8.0, certifi 2026.10.23, idna 3.20, setuptools 84.2.1, virtualenv 21.14.13, filelock 4.2.4; pytest 9.1.1 (PYSEC-2026-1845); poetry pinned 2.5.1 in CI.
 7. Duplicate `if:` in build.yml removed.
 8. Data/logs in %LOCALAPPDATA%\Guardian; data.json/db.json/logs git-ignored (were not tracked).
+
+## Hardening A-G + extra ports (2026-10-26)
+A. CI: dist/SHA256SUMS + actions/attest-build-provenance (job-scoped id-token/attestations write, continue-on-error, outcome logged).
+B. util/integrity.py: SHA256 of WinDivert64.dll/.sys vs official 2.2.2-A (zip sha256 63cb4176…3f15, verified byte-identical to pydivert 4.0.1 wheel); exit 3 on mismatch.
+C. DLL_PATH pinned to absolute package dir; SetDllDirectoryW("") + SetDefaultDllDirectories; data/logs/crash reports in %LOCALAPPDATA%\Guardian (fallback CWD).
+D. accept_list(): cache_<name>.json, rejects empty/malformed/>30% change; Azure db.json not overwritten on rejection.
+E. PACKET_FILTER = UDP 6672 + 61455-61458 exactly; open_windivert()/probe_filter() -> FilterOpenError -> clean exit 4.
+F. .github/dependabot.yml (pip + github-actions).
+G. tests/test_fuzz.py (hypothesis).

@@ -47,6 +47,17 @@ def udp_send(addr: str, port: int, size: int) -> None:
         so.sendto(b"\x01" * size, (addr, port))
 
 
+# 0. Integrity of the WinDivert binaries + absolute DLL path (before the DLL is loaded)
+from util.integrity import secure_windivert, windivert_dir  # noqa: E402
+
+try:
+    results["integrity_hashes"] = secure_windivert()
+    results["integrity_dir"] = str(windivert_dir())
+    results["integrity_ok"] = True
+except Exception as e:
+    results["integrity_ok"] = False
+    results["integrity_error"] = repr(e)
+
 results["sc_before"] = sc_query()
 
 # 1. Capture per port, loopback (WinDivert sees loopback as outbound + loopback flag)
@@ -157,11 +168,45 @@ results["lifecycle_sc_after_cleanup"] = sc_query()
 results["lifecycle_ok"] = (
     lc.loaded_by_guardian and "RUNNING" not in results["lifecycle_sc_after_cleanup"]
 )
+# 5. Strict Guardian filter: exactly 6672 + 61455-61458, nothing else; clean error on bad filter
+probe_ports = [6671, 6672, 6673, 61454, 61455, 61456, 61457, 61458, 61459]
+pk = sniff(
+    s.PACKET_FILTER + " and ip.DstAddr == 127.0.0.1",
+    lambda: [udp_send("127.0.0.1", p, 64) for p in probe_ports],
+    5,
+)
+results["strict_filter_ports"] = sorted({p.dst_port for p in pk})
+pk6672 = sniff(
+    s.PACKET_FILTER_6672_ONLY + " and ip.DstAddr == 127.0.0.1",
+    lambda: [udp_send("127.0.0.1", p, 64) for p in probe_ports],
+    1,
+)
+results["filter_6672_only_ports"] = sorted({p.dst_port for p in pk6672})
+try:
+    s.probe_filter(True)
+    results["probe_filter_ok"] = True
+except Exception as e:
+    results["probe_filter_ok"] = repr(e)
+try:
+    with s.open_windivert(filter_="udp.DstPort == == 6672"):
+        pass
+    results["bad_filter_clean_error"] = False
+except s.FilterOpenError as e:
+    results["bad_filter_clean_error"] = True
+    results["bad_filter_message"] = str(e)
+results["strict_filter_ok"] = (
+    results["strict_filter_ports"] == sorted(s.ALL_PORTS)
+    and results["filter_6672_only_ports"] == [6672]
+    and results["probe_filter_ok"] is True
+    and results["bad_filter_clean_error"] is True
+)
 print(json.dumps(results, indent=2))
 ok = (
     all(v["ok"] for k, v in results.items() if k.startswith("capture_"))
     and results["filter_ok"]
     and results["drop_reinject_ok"]
     and results["lifecycle_ok"]
+    and results["integrity_ok"]
+    and results["strict_filter_ok"]
 )
 sys.exit(0 if ok else 1)
