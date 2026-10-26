@@ -395,6 +395,9 @@ class LiveSessionController:
         self.clock = clock
         self.pseudos: dict[str, str] = {}
         self.events: list[str] = []
+        # Dernier message de bascule (A/T) : une seule ligne, remplacée, effacée après
+        # TOGGLE_MSG_SECONDS. (texte, instant d'affichage selon self.clock)
+        self.toggle_msg: tuple[str, float] | None = None
         # Les IP déjà en Blacklist restent bloquées dans cette vue aussi.
         for ip, _name in list(blacklist):
             self.blocked[ip] = PERMANENT
@@ -570,6 +573,41 @@ LEVEL_COLORS = {
 }
 
 
+TOGGLE_MSG_SECONDS = 4.0
+
+
+def set_toggle_msg(ctrl: LiveSessionController, text: str) -> None:
+    """Remplace le message de bascule courant (jamais empilé)."""
+    ctrl.toggle_msg = (text, ctrl.clock())
+
+
+def toggle_line(ctrl: LiveSessionController) -> list[str]:
+    """Ligne du dernier message de bascule, vide une fois expirée."""
+    msg = getattr(ctrl, "toggle_msg", None)
+    if msg is None:
+        return []
+    text, since = msg
+    if ctrl.clock() - since > TOGGLE_MSG_SECONDS:
+        ctrl.toggle_msg = None
+        return []
+    return [text]
+
+
+def status_word(enabled: bool) -> str:
+    """Mot d'état (ACTIVÉ/désactivé, ON/off) seul en couleur : vert si actif, rouge
+    sinon. Les séquences ANSI sont ignorées par ``fit_line`` (largeur intacte)."""
+    if enabled:
+        return Fore.GREEN + t("live.on") + Style.RESET_ALL
+    return Fore.RED + t("live.off") + Style.RESET_ALL
+
+
+def recording_status(active: bool, path: str = "") -> str:
+    """État de l'enregistrement pour l'en-tête (seul le mot d'état est coloré)."""
+    if active:
+        return t("live.rec_on", on=status_word(True), path=path)
+    return status_word(False)
+
+
 def render_head(
     ctrl: LiveSessionController, recording: str, players: PlayerCounter | None = None
 ) -> list[str]:
@@ -579,14 +617,14 @@ def render_head(
         t(
             "live.status",
             days=AUTO_BLOCK_SECONDS // 86400,
-            auto=t("live.on") if ctrl.auto_block else t("live.off"),
+            auto=status_word(ctrl.auto_block),
             hint="" if ctrl.auto_block else t("live.auto_hint"),
             rec=recording,
         ),
         t(
             "live.total_status",
             minutes=TOTAL_BLOCK_SECONDS // 60,
-            state=t("live.on") if ctrl.total_block else t("live.off"),
+            state=status_word(ctrl.total_block),
         ),
         t("live.total_warning"),
         *(
@@ -655,7 +693,7 @@ def render(
             alerts.append(color + p.alert + Style.RESET_ALL)
     if not peers:
         rows.append(t("live.no_peers"))
-    tail = ["", *alerts, *ctrl.events[-5:], "", t("live.keys")]
+    tail = ["", *alerts, *ctrl.events[-5:], *toggle_line(ctrl), "", t("live.keys")]
     if size is None:
         return "\n".join(head + rows + tail)
     width, height = size
@@ -870,20 +908,14 @@ def handle_key(
     elif key == "a":
         ctrl.toggle_auto_block()
         _save(config, AUTO_BLOCK_KEY, ctrl.auto_block)
-        ctrl.events.append(
-            t(
-                "live.ev.auto_toggled",
-                state=t("live.on") if ctrl.auto_block else t("live.off"),
-            )
+        set_toggle_msg(
+            ctrl, t("live.ev.auto_toggled", state=status_word(ctrl.auto_block))
         )
     elif key == "t":
         ctrl.toggle_total_block()
         _save(config, TOTAL_BLOCK_KEY, ctrl.total_block)
-        ctrl.events.append(
-            t(
-                "live.ev.total_toggled",
-                state=t("live.on") if ctrl.total_block else t("live.off"),
-            )
+        set_toggle_msg(
+            ctrl, t("live.ev.total_toggled", state=status_word(ctrl.total_block))
         )
     elif key == "e":
         if recorder.active:
@@ -1114,7 +1146,9 @@ def live_view(
                 return "q"
             ctrl, rec_obj = session.ctrl, session.recorder
             rec = (
-                t("live.rec_on", path=rec_obj.path) if rec_obj.active else t("live.off")
+                recording_status(True, rec_obj.path)
+                if rec_obj.active
+                else recording_status(False)
             )
             cols, lines_ = shutil.get_terminal_size((120, 30))
             with session.lock:

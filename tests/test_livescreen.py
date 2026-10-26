@@ -119,7 +119,7 @@ def test_toggle_auto_shield_no_prompt_persists_and_header_updates():
     head = " ".join(ls.render_head(ctrl, "off"))
     assert "ACTIVÉ" in head or "ON" in head
     frame = ls.render(SessionMonitor(), ctrl, [], "off", 0.0, size=(200, 30))
-    assert ctrl.events[-1] in frame
+    assert ctrl.toggle_msg is not None and ctrl.toggle_msg[0] in frame
     ls.handle_key("a", ctrl, [], {}, FakeRecorder(), no_prompt, cfg)
     assert ctrl.auto_block is False and cfg.data[ls.AUTO_BLOCK_KEY] is False
 
@@ -143,3 +143,70 @@ def test_prompt_keys_use_prompt_and_ignore_bad_input():
     for k in ("b", "p", "d"):
         ls.handle_key(k, ctrl, [], {"203.0.113.5": 9e9}, FakeRecorder(), prompt)
     assert len(asked) == 3 and "203.0.113.5" in asked[2]
+
+
+def test_status_words_colored_green_red_fr_en():
+    from colorama import Fore, Style
+
+    from util import i18n
+
+    try:
+        for lang, on, off in (("fr", "ACTIVÉ", "désactivé"), ("en", "ON", "off")):
+            i18n.set_language(lang, persist=False)
+            assert ls.status_word(True) == Fore.GREEN + on + Style.RESET_ALL
+            assert ls.status_word(False) == Fore.RED + off + Style.RESET_ALL
+            rec = ls.recording_status(True, "x.log")
+            assert rec == Fore.GREEN + on + Style.RESET_ALL + " (x.log)"
+            assert ls.recording_status(False) == ls.status_word(False)
+            ctrl = make_ctrl(auto_block=True)
+            head = ls.render_head(ctrl, ls.recording_status(False))
+            status = next(h for h in head if ls.status_word(True) in h)
+            assert ls.status_word(False) in status  # enregistrement désactivé, rouge
+            total = i18n.t(
+                "live.total_status",
+                minutes=ls.TOTAL_BLOCK_SECONDS // 60,
+                state=ls.status_word(False),
+            )
+            assert total in head and Fore.GREEN not in total
+            # Les codes couleur n'entrent pas dans le calcul de largeur.
+            plain = ls._ANSI.sub("", status)
+            fitted = ls.fit_line(status, 30)
+            assert len(ls._ANSI.sub("", fitted)) == min(29, len(plain))
+    finally:
+        i18n.set_language("fr", persist=False)
+
+
+def test_no_test_version_marker():
+    from util import i18n
+
+    for key in ("live.title", "menu.live"):
+        for text in i18n.STRINGS[key].values():
+            assert "test" not in text.lower()
+
+
+def test_toggle_messages_single_line_replaced_and_expire():
+    from colorama import Fore
+
+    now = [1000.0]
+    ctrl = ls.LiveSessionController(
+        {}, FakeList(), clock=lambda: now[0], auto_block_available=True
+    )
+    cfg = FakeConfig()
+    for key in ("a", "t", "a", "t", "a"):
+        ls.handle_key(key, ctrl, [], {}, FakeRecorder(), no_prompt, cfg)
+    frame = ls.render(SessionMonitor(), ctrl, [], "off", 0.0, size=(200, 30))
+    shown = [
+        line
+        for line in frame.split("\n")
+        if ls._ANSI.sub("", line).startswith(
+            ("Bouclier auto :", "Blocage total :", "Auto shield:", "Total block:")
+        )
+    ]
+    assert len(shown) == 1  # un seul message, le dernier (A -> bouclier activé)
+    assert Fore.GREEN in shown[0]
+    ls.handle_key("a", ctrl, [], {}, FakeRecorder(), no_prompt, cfg)
+    assert ctrl.auto_block is False
+    assert ctrl.toggle_msg is not None and Fore.RED in ctrl.toggle_msg[0]
+    now[0] += ls.TOGGLE_MSG_SECONDS + 1
+    assert ls.toggle_line(ctrl) == []
+    assert ctrl.toggle_msg is None

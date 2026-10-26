@@ -58,7 +58,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "The filter could not start (WinDivert): no filter is active. Run Guardian as administrator.",
     },
     "menu.kick_by_ip": {"fr": "Expulser par IP", "en": "Kick by IP"},
-    "menu.live": {"fr": "Session en direct (test)", "en": "Live session (test)"},
+    "menu.live": {"fr": "Session en direct", "en": "Live session"},
     "menu.edit_lists": {"fr": "Modifier les listes", "en": "Edit lists"},
     "menu.language": {"fr": "Langue : Français", "en": "Language: English"},
     "menu.discord": {"fr": "Discord de Speyedr", "en": "Speyedr's Discord"},
@@ -282,8 +282,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "The Live session view requires Windows.",
     },
     "live.title": {
-        "fr": "Guardian — Session en direct (version de test)",
-        "en": "Guardian — Live session (test build)",
+        "fr": "Guardian — Session en direct",
+        "en": "Guardian — Live session",
     },
     "live.status": {
         "fr": "Bouclier auto (rouge, {days} jours, D pour lever) : {auto}{hint}   Enregistrement : {rec}",
@@ -295,7 +295,7 @@ STRINGS: dict[str, dict[str, str]] = {
     },
     "live.on": {"fr": "ACTIVÉ", "en": "ON"},
     "live.off": {"fr": "désactivé", "en": "off"},
-    "live.rec_on": {"fr": "ACTIVÉ ({path})", "en": "ON ({path})"},
+    "live.rec_on": {"fr": "{on} ({path})", "en": "{on} ({path})"},
     "live.header": {
         "fr": "{n:>2}  {ip:<15}  {country:<5}  {seen:<10}  {pps:>6}  {bps:>8}  {avg:>5}  "
         "{max:>5}  {state:<10}  Pseudo",

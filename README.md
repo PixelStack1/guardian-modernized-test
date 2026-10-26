@@ -7,6 +7,63 @@ Custom firewall for the game GTA Online (version 1.66 and onwards).
 [![Downloads](https://img.shields.io/github/downloads/TheMythologist/guardian/total)](https://github.com/TheMythologist/guardian/releases)
 [![License](https://img.shields.io/github/license/TheMythologist/guardian)](LICENSE)
 
+## Guardian 3.6.1 — ce que fait Guardian (Français)
+
+Guardian est un pare-feu pour GTA Online sur Windows. Il s'appuie sur le pilote **WinDivert** et se
+contente de **laisser passer ou jeter des paquets** : il ne lit ni ne modifie jamais le jeu, et ne
+fabrique ni n'envoie jamais de paquets.
+
+- **Modes de session** : session solo, liste blanche, liste noire, liste blanche automatique,
+  session verrouillée, **session vide (forcer l'hôte)** et **session publique en hôte au départ**
+  (60 s fermée pour devenir hôte, puis ouverture automatique).
+- **Session en direct** : liste des IP connectées avec pays (drapeau), paquets/s, octets/s, taille
+  moyenne et maximale des paquets. Une rafale anormale colore la ligne en **orange** (inhabituel)
+  puis en **rouge** (suspect). L'état ACTIVÉ/désactivé des options s'affiche en vert/rouge.
+- **Bouclier auto** (désactivé par défaut, touche `A`) : bloque automatiquement pendant **7 jours**
+  les seules IP au niveau rouge. `D` débloque à tout moment.
+- **Blocage total** (désactivé par défaut, touche `T`) : quand une IP est bloquée, coupe **aussi
+  l'envoi** vers elle pendant **10 minutes**. ⚠️ Ce n'est **pas un kick garanti** : cela coupe
+  seulement le lien entre toi et ce joueur, et si ce joueur est l'hôte, c'est toi qui peux sortir.
+- **Bloquer / Débloquer à la main** (`B` / `D`) et **pseudo** (`P`) pour nommer une IP.
+- **Rapports d'incident automatiques** dans `%LOCALAPPDATA%\Guardian\rapports\` à chaque blocage :
+  IP, pays, heure, ce qu'elle a envoyé (débits, tailles, type d'anomalie), prêts à transmettre à
+  Rockstar. Une IP n'identifie pas un compte et ne garantit aucun ban.
+- **Serveurs Rockstar reconnus** : affichés à part (en cyan), jamais comptés comme joueurs et
+  jamais bloqués.
+- **`[R]etour`** revient au menu en laissant la protection active en arrière-plan ;
+  **`[Q]uitter`** l'arrête.
+- **Mode enregistrement** (`E`) pour régler les seuils : uniquement des métadonnées (heure, IP,
+  taille, sens), jamais le contenu des paquets.
+- **Langue** : Français (par défaut) ou English, depuis le menu.
+
+Guardian est basé sur le Guardian original de **Speyedr** et de ses contributeurs (dont
+TheMythologist), distribué sous licence **LGPL** (voir [LICENSE](LICENSE)). Historique : [CHANGELOG](CHANGELOG.md).
+
+## Guardian 3.6.1 — what Guardian does (English)
+
+Guardian is a firewall for GTA Online on Windows, built on the **WinDivert** driver. It only
+**lets packets through or drops them**: it never reads or modifies the game, and never crafts or
+sends packets.
+
+- **Session modes**: solo, whitelisted, blacklisted, auto-whitelisted, locked, **empty session
+  (force host)** and **public session, host first** (closed 60 s so you become host, then opens).
+- **Live session**: connected IPs with country (flag), packets/s, bytes/s, average and max packet
+  size. Abnormal bursts turn the row **orange** (unusual) then **red** (suspicious). ON/off
+  states are shown in green/red.
+- **Auto shield** (off by default, `A`): blocks red-level IPs only, for **7 days**. `D` unblocks.
+- **Total block** (off by default, `T`): when an IP is blocked, also cuts **outgoing** traffic to
+  it for **10 minutes**. ⚠️ **Not a guaranteed kick**; if that player is host, you may be the one
+  who leaves.
+- Manual **Block / Unblock** (`B` / `D`) and **nickname** (`P`).
+- **Automatic incident reports** in `%LOCALAPPDATA%\Guardian\rapports\` (IP, country, time, what it
+  sent), ready to send to Rockstar. An IP does not identify an account nor guarantee a ban.
+- **Rockstar servers recognised**: shown separately, never counted as players, never blocked.
+- **`[R]`** returns to the menu with protection still running in the background; **`[Q]`** stops it.
+- **Recording mode** (`E`) for tuning: metadata only (time, IP, size, direction), never packet content.
+- **Language**: French (default) or English.
+
+Based on the original Guardian by **Speyedr** and contributors (including TheMythologist), LGPL.
+
 ## [Download the latest version](https://github.com/TheMythologist/guardian/releases/latest)
 
 ### Requirements
@@ -194,18 +251,18 @@ n'est ni lu ni modifié.
 nécessaire pour créer la session. Une fois hôte, **les nouveaux joueurs qui arrivent ne te retirent
 pas l'hôte** (l'hôte ne change que s'il quitte la session).
 
-## Session en direct (version de test)
+## Session en direct
 
-**Français** — Fonction expérimentale, non publiée. Menu principal → *Session en direct (test)*.
+**Français** — Menu principal → *Session en direct*.
 
 - Tableau des pairs connectés : pays avec drapeau (ex. `🇫🇷 FR`, `—` si IP privée ou inconnue),
   heure de première apparition, paquets/s, octets/s, taille moyenne et max (fenêtre glissante de 3 s).
 - La « normale » de chaque pair est apprise pendant ses 60 premières secondes. Ligne orange
   (« inhabituel ») puis rouge (« suspect ») en cas de rafale ciblée, de paquets énormes ou de longues
   séries de petits paquets identiques. Seuils : en tête de `guardian/network/anomaly.py`.
-- **Bouclier auto** (IP rouges uniquement) : **désactivé par défaut** pendant la phase de test.
+- **Bouclier auto** (IP rouges uniquement) : **désactivé par défaut**.
   À activer avec la touche `A` (ou `"auto_block_suspect": true` dans
-  `%LOCALAPPDATA%\Guardian\data.json`) une fois les seuils validés. Il bloque l'IP **7 jours**
+  `%LOCALAPPDATA%\Guardian\data.json`). Il bloque l'IP **7 jours**
   et affiche `Bouclier auto : <ip> bloqué (rafale)`. Ces blocages sont **persistants** (ils survivent
   à un redémarrage) dans un fichier **séparé**, `%LOCALAPPDATA%\Guardian\auto_block.json`
   (IP + date d'expiration uniquement), jamais dans la liste noire de `data.json`. Ils **expirent
@@ -231,7 +288,8 @@ pas l'hôte** (l'hôte ne change que s'il quitte la session).
   ⚠️ Cela coupe **seulement la liaison entre toi et ce joueur** ; ce n'est **pas un kick garanti**
   de toute la session, et **si ce joueur est l'hôte, c'est toi qui peux être éjecté**.
 - Touches : `B` bloquer (immédiat + ajout à la liste noire avec date et pseudo), `P` pseudo,
-  `D` débloquer, `A` bouclier auto, `T` blocage total, `E` enregistrement, `Q` retour.
+  `D` débloquer, `A` bouclier auto, `T` blocage total, `E` enregistrement, `↑↓`/`+-` page, `R` retour au menu (la protection
+  continue en arrière-plan), `Q` quitter (arrête la protection).
 - Enregistrement : uniquement des métadonnées (horodatage, IP, taille, sens), jamais le contenu,
   dans `%LOCALAPPDATA%\Guardian\enregistrements\`. Nouveau fichier tous les 1 000 000 lignes /
   100 Mo, arrêt automatique après 5 fichiers.

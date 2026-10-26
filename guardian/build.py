@@ -2,7 +2,7 @@ import os
 
 import PyInstaller.__main__
 
-version = "3.6.0"
+version = "3.6.1"
 
 
 def build() -> None:
