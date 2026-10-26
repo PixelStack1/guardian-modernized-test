@@ -150,17 +150,17 @@ def test_azure_scrape_no_links_raises():
         db.get_azure_ip_ranges_download("u")
 
 
-def test_data_file_uses_localappdata(tmp_path, monkeypatch):
+def test_data_file_uses_localappdata_no_cwd_migration(tmp_path, monkeypatch):
     from guardian.util import paths
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "lad"))
     cwd = tmp_path / "cwd"
     cwd.mkdir()
-    (cwd / "data.json").write_text("{}")
+    (cwd / "data.json").write_text('{"planted": 1}')
     monkeypatch.chdir(cwd)
     p = paths.data_file("data.json")
     assert p == tmp_path / "lad" / "Guardian" / "data.json"
-    assert p.read_text() == "{}"  # legacy file migrated
+    assert not p.exists()  # never copied from the CWD
 
 
 def test_data_dir_falls_back_to_home(tmp_path, monkeypatch):

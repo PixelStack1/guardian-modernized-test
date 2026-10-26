@@ -95,7 +95,11 @@ def _cache_path(name: str, cache_dir: Path | None) -> Path:
     )
 
 
-def load_cached_list(name: str, cache_dir: Path | None = None) -> set[str] | None:
+MAX_CACHE_AGE_S = 7 * 24 * 3600
+MAX_CONSECUTIVE_REJECTIONS = 3
+
+
+def _read_cache(name: str, cache_dir: Path | None) -> dict[str, object] | None:
     try:
         data = json.loads(_cache_path(name, cache_dir).read_text())
         prefixes = data["prefixes"]
@@ -103,13 +107,25 @@ def load_cached_list(name: str, cache_dir: Path | None = None) -> set[str] | Non
             isinstance(x, str) for x in prefixes
         ):
             return None
-        return set(prefixes)
+        return data  # type: ignore[no-any-return]
     except Exception:
         return None
 
 
-def validate_list(new: set[str], old: set[str] | None) -> None:
-    """Raise ListRejected if new is empty, malformed, or differs from old by more than 30%."""
+def _write_cache(name: str, cache_dir: Path | None, data: dict[str, object]) -> None:
+    with contextlib.suppress(OSError):
+        _cache_path(name, cache_dir).write_text(json.dumps(data))
+
+
+def load_cached_list(name: str, cache_dir: Path | None = None) -> set[str] | None:
+    data = _read_cache(name, cache_dir)
+    return set(data["prefixes"]) if data else None  # type: ignore[call-overload]
+
+
+def validate_list(
+    new: set[str], old: set[str] | None, check_change: bool = True
+) -> None:
+    """Raise ListRejected if new is empty, malformed, or (if check_change) differs from old by > 30%."""
     if not new:
         raise ListRejected("empty list")
     for prefix in new:
@@ -117,7 +133,7 @@ def validate_list(new: set[str], old: set[str] | None) -> None:
             cidr_to_tuple(prefix)
         except (ValueError, IndexError, TypeError, AttributeError) as e:
             raise ListRejected(f"malformed prefix {prefix!r}") from e
-    if old:
+    if check_change and old:
         ratio = len(old ^ new) / len(old)
         if ratio > MAX_LIST_CHANGE_RATIO:
             raise ListRejected(
@@ -126,20 +142,39 @@ def validate_list(new: set[str], old: set[str] | None) -> None:
 
 
 def accept_list(
-    name: str, new: set[str] | None, fallback: set[str], cache_dir: Path | None = None
+    name: str,
+    new: set[str] | None,
+    fallback: set[str],
+    cache_dir: Path | None = None,
+    now: float | None = None,
 ) -> set[str]:
-    """Return new (and cache it) if valid, else the last good cached list, else fallback."""
-    old = load_cached_list(name, cache_dir)
+    """
+    Return new (and cache it) if valid, else the last good cached list, else fallback.
+    The 30% change guard is lifted when the cache is older than 7 days or after 3 consecutive
+    rejections, so a legitimate large change is eventually accepted. Empty/malformed lists are
+    always rejected.
+    """
+    now = time.time() if now is None else now
+    cache = _read_cache(name, cache_dir)
+    old = set(cache["prefixes"]) if cache else None  # type: ignore[call-overload]
     if new is not None:
+        saved = float(cache.get("saved", 0)) if cache else 0.0  # type: ignore[arg-type]
+        rejections = int(cache.get("rejections", 0)) if cache else 0  # type: ignore[call-overload]
+        stale = cache is not None and now - saved > MAX_CACHE_AGE_S
+        check_change = not (stale or rejections >= MAX_CONSECUTIVE_REJECTIONS)
         try:
-            validate_list(new, old)
+            validate_list(new, old, check_change)
         except ListRejected as e:
             print(f"WARNING: rejected new {name} list ({e}); keeping previous list.")
+            if cache is not None:
+                cache["rejections"] = rejections + 1
+                _write_cache(name, cache_dir, cache)
         else:
-            with contextlib.suppress(OSError):
-                _cache_path(name, cache_dir).write_text(
-                    json.dumps({"saved": time.time(), "prefixes": sorted(new)})
-                )
+            _write_cache(
+                name,
+                cache_dir,
+                {"saved": now, "rejections": 0, "prefixes": sorted(new)},
+            )
             return set(new)
     return set(old) if old else set(fallback)
 
@@ -302,15 +337,25 @@ def get_dynamic_blacklist(backup_file: str | None = None) -> set[CIDR_BLOCK]:
     try:
         download_link, content = get_azure_ip_ranges_download()
         ranges = parse_azure_ip_ranges(content)
-        previous = None
-        if backup_path.is_file():
+        cache_dir = backup_path.parent
+        if load_cached_list("azure", cache_dir) is None and backup_path.is_file():
+            # Seed the guard with the existing backup (age = file mtime).
             with contextlib.suppress(Exception):
-                previous = set(
+                previous = sorted(
                     ipv4_only(parse_azure_ip_ranges(backup_path.read_bytes()))
                 )
-        validate_list(
-            set(ipv4_only(ranges)), previous
-        )  # raises ListRejected -> keep backup
+                _write_cache(
+                    "azure",
+                    cache_dir,
+                    {
+                        "saved": backup_path.stat().st_mtime,
+                        "rejections": 0,
+                        "prefixes": previous,
+                    },
+                )
+        new = set(ipv4_only(ranges))
+        if accept_list("azure", new, set(), cache_dir) != new:
+            raise ListRejected("new Azure list rejected; keeping backup")
         backup_path.write_bytes(azure_file_add_timestamp(content, download_link))
     except Exception as e:
         print("ERROR: Could not parse Azure ranges from URL. Reason: ", e)

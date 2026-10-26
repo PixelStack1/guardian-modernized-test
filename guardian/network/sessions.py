@@ -77,13 +77,14 @@ ALL_PORTS = frozenset({GTA_PORT}) | EXTRA_PORTS
 
 PACKET_FILTER_6672_ONLY = "udp and udp.DstPort == 6672 and udp.PayloadLength > 0 and ip"
 PACKET_FILTER = (
-    "udp and (udp.DstPort == 6672 or (udp.DstPort >= 61455 and udp.DstPort <= 61458))"
+    "udp and (udp.DstPort == 6672"
+    " or (inbound and udp.DstPort >= 61455 and udp.DstPort <= 61458))"
     " and udp.PayloadLength > 0 and ip"
 )
 
 
 def packet_filter(extra_ports: bool = True) -> str:
-    """Strict filter: UDP to exactly 6672 (+ 61455-61458 if enabled), nothing else."""
+    """Strict filter: UDP to exactly 6672 (+ inbound 61455-61458 if enabled), nothing else."""
     return PACKET_FILTER if extra_ports else PACKET_FILTER_6672_ONLY
 
 
@@ -107,7 +108,8 @@ def is_rockstar_ip(ip: str) -> bool:
 
 
 def is_extra_port(packet: pydivert.Packet) -> bool:
-    return packet.dst_port in EXTRA_PORTS
+    """Inbound packet to 61455-61458 (outbound traffic on these ports is never filtered)."""
+    return bool(packet.is_inbound) and packet.dst_port in EXTRA_PORTS
 
 
 class FilterOpenError(Exception):
