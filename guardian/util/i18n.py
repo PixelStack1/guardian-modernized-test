@@ -260,8 +260,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Guardian — Live session (test build)",
     },
     "live.status": {
-        "fr": "Bouclier auto (rouge, {minutes} min) : {auto}{hint}   Enregistrement : {rec}",
-        "en": "Auto shield (red, {minutes} min): {auto}{hint}   Recording: {rec}",
+        "fr": "Bouclier auto (rouge, {days} jours, D pour lever) : {auto}{hint}   Enregistrement : {rec}",
+        "en": "Auto shield (red, {days} days, D to lift): {auto}{hint}   Recording: {rec}",
     },
     "live.auto_hint": {
         "fr": " (par défaut en test ; [A] pour activer)",
@@ -291,6 +291,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "[E] Recording  [Q] Back",
     },
     "live.blocked": {"fr": "BLOQUÉE", "en": "BLOCKED"},
+    "live.blocked_days": {"fr": "BLOQUÉE {d} j", "en": "BLOCKED {d} d"},
+    "live.blocked_hours": {"fr": "BLOQUÉE {h} h", "en": "BLOCKED {h} h"},
     "live.blocked_min": {"fr": "BLOQUÉE {m} min", "en": "BLOCKED {m} min"},
     "live.ask_block": {
         "fr": "Numéro de la ligne à bloquer : ",
@@ -311,8 +313,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "IP {ip} blocked and added to the blacklist",
     },
     "live.ev.auto": {
-        "fr": "Bouclier auto : {ip} bloqué ({reason}) pour {minutes} min",
-        "en": "Auto shield: {ip} blocked ({reason}) for {minutes} min",
+        "fr": "Bouclier auto : {ip} bloqué ({reason}) pour {days} jours (D pour lever)",
+        "en": "Auto shield: {ip} blocked ({reason}) for {days} days (D to lift)",
     },
     "live.ev.auto_skipped": {
         "fr": "Bouclier auto : {ip} non bloqué (liste blanche ou plage Rockstar/Azure)",

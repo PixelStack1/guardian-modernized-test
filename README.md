@@ -183,13 +183,19 @@ User data (`data.json`, `db.json`, `history.log`, `debugger.log`) is stored in
   séries de petits paquets identiques. Seuils : en tête de `guardian/network/anomaly.py`.
 - **Bouclier auto** (IP rouges uniquement) : **désactivé par défaut** pendant la phase de test.
   À activer avec la touche `A` (ou `"auto_block_suspect": true` dans
-  `%LOCALAPPDATA%\Guardian\data.json`) une fois les seuils validés. Il bloque l'IP **en mémoire
-  pendant 10 min** (rien n'est écrit dans `data.json`) et affiche `Bouclier auto : <ip> bloqué (rafale)`.
-  Il ne bloque **jamais** une IP de la liste blanche ni une plage Rockstar/Take-Two/Azure connue.
+  `%LOCALAPPDATA%\Guardian\data.json`) une fois les seuils validés. Il bloque l'IP **7 jours**
+  et affiche `Bouclier auto : <ip> bloqué (rafale)`. Ces blocages sont **persistants** (ils survivent
+  à un redémarrage) dans un fichier **séparé**, `%LOCALAPPDATA%\Guardian\auto_block.json`
+  (IP + date d'expiration uniquement), jamais dans la liste noire de `data.json`. Ils **expirent
+  tout seuls** (purge au chargement et en continu) et se lèvent avant terme avec `D`.
+  ⚠️ Un innocent bloqué par erreur le reste **7 jours**, sauf déblocage manuel avec `D`.
+  Il ne bloque **jamais** une IP de la liste blanche ni une plage Rockstar/Take-Two/Azure connue
+  (filtre appliqué aussi au chargement du fichier). Si les plages Rockstar/Azure n'ont pas pu être
+  chargées, le bouclier auto reste désactivé et les entrées du fichier ne sont pas appliquées.
   Les IP orange ne sont jamais bloquées automatiquement.
 - **Bouclier manuel** (`B`) : bloque n'importe quelle IP choisie et l'écrit **de façon permanente**
   dans la liste noire de `data.json` (avec date et pseudo) ; `D` pour débloquer (retire aussi
-  l'IP de la liste noire).
+  l'IP de la liste noire, ou de `auto_block.json` pour un blocage auto).
 - Touches : `B` bloquer (immédiat + ajout à la liste noire avec date et pseudo), `P` pseudo,
   `D` débloquer, `A` bouclier auto, `E` enregistrement, `Q` retour.
 - Enregistrement : uniquement des métadonnées (horodatage, IP, taille, sens), jamais le contenu,

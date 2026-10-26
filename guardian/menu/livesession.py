@@ -34,8 +34,9 @@ from util.i18n import t
 
 # Priorité WinDivert du handle de la vue en direct (plus haute = vu en premier).
 LIVE_PRIORITY = 1000
-# Durée d'un blocage automatique (secondes).
-AUTO_BLOCK_SECONDS = 10 * 60
+# Durée d'un blocage automatique (secondes) : 7 jours, persistant dans
+# auto_block.json (séparé de data.json), levé avant terme avec la touche D.
+AUTO_BLOCK_SECONDS = 7 * 24 * 3600
 # Clé de data.json du bouclier auto (IP rouges uniquement). ACTIVÉ si absente.
 # Les IP orange ne sont jamais bloquées automatiquement (bouclier manuel).
 AUTO_BLOCK_KEY = "auto_block_suspect"
@@ -134,6 +135,8 @@ class LiveSessionController:
         auto_block_guard: Callable[[str], bool] | None = None,
         reporter: Callable[[str, str, str], None] | None = None,
         auto_block_available: bool = True,
+        auto_store: Any = None,
+        auto_entries: dict[str, float] | None = None,
     ) -> None:
         self.blocked = blocked
         # reporter(ip, type « auto »/« manual », pseudo) : rapport d'incident à chaque blocage.
@@ -153,12 +156,31 @@ class LiveSessionController:
         # Les IP déjà en Blacklist restent bloquées dans cette vue aussi.
         for ip, _name in list(blacklist):
             self.blocked[ip] = PERMANENT
+        # Blocages auto persistants (auto_block.json) : ip -> expiration.
+        # ``auto_store`` expose request(dict) (AutoBlockSaver) ; None = mémoire seule.
+        self.auto_store = auto_store
+        self.auto_entries: dict[str, float] = {}
+        if (
+            auto_block_available
+        ):  # sans plages R*/Azure, impossible de filtrer : ignorés
+            for ip, expiry in (auto_entries or {}).items():
+                if ip in self.blocked or self.auto_block_guard(ip):
+                    continue
+                self.auto_entries[ip] = expiry
+                self.blocked[ip] = expiry
+
+    def _persist(self) -> None:
+        if self.auto_store is not None:
+            with contextlib.suppress(Exception):
+                self.auto_store.request(self.auto_entries)
 
     def block(self, ip: str, pseudo: str = "") -> None:
         """Blocage MANUEL immédiat, écrit de façon PERMANENTE dans la Blacklist
-        (data.json). À l'inverse, le bouclier auto ne bloque qu'en mémoire, 10 min."""
+        (data.json). Le bouclier auto, lui, bloque 7 jours via auto_block.json."""
         pseudo = pseudo or self.pseudos.get(ip, "")
         self.blocked[ip] = PERMANENT
+        if self.auto_entries.pop(ip, None) is not None:  # devient permanent (data.json)
+            self._persist()
         self.blacklist.add(ip, blacklist_label(pseudo, datetime.now()))
         self.blacklist.save()
         self.events.append(t("live.ev.blocked", ip=ip))
@@ -190,14 +212,24 @@ class LiveSessionController:
                 self._guard_reported.add(peer.ip)
                 self.events.append(t("live.ev.auto_skipped", ip=peer.ip))
             return False
-        # Blocage en mémoire uniquement (jamais écrit dans data.json), expire seul.
-        self.blocked[peer.ip] = self.clock() + AUTO_BLOCK_SECONDS
+        # Jamais écrit dans data.json : fichier séparé auto_block.json, expire seul.
+        from network.autoblock import MAX_ENTRIES, cap
+
+        expiry = self.clock() + AUTO_BLOCK_SECONDS
+        self.blocked[peer.ip] = expiry
+        self.auto_entries[peer.ip] = expiry
+        if len(self.auto_entries) > MAX_ENTRIES:
+            kept = cap(self.auto_entries, MAX_ENTRIES)
+            for ip in set(self.auto_entries) - set(kept):
+                self.blocked.pop(ip, None)
+            self.auto_entries = kept
+        self._persist()
         self.events.append(
             t(
                 "live.ev.auto",
                 ip=peer.ip,
                 reason=t(peer.reason_key or "reason.burst"),
-                minutes=AUTO_BLOCK_SECONDS // 60,
+                days=AUTO_BLOCK_SECONDS // 86400,
             )
         )
         self._report(peer.ip, "auto", self.pseudos.get(peer.ip, ""))
@@ -205,6 +237,8 @@ class LiveSessionController:
 
     def unblock(self, ip: str, remove_from_blacklist: bool = True) -> None:
         self.blocked.pop(ip, None)
+        if self.auto_entries.pop(ip, None) is not None:
+            self._persist()
         if remove_from_blacklist and ip in self.blacklist:
             self.blacklist.remove(ip)
             self.blacklist.save()
@@ -216,6 +250,11 @@ class LiveSessionController:
             if expiry != PERMANENT and now >= expiry:
                 self.blocked.pop(ip, None)
                 self.events.append(t("live.ev.expired", ip=ip))
+        expired = [ip for ip, e in self.auto_entries.items() if now >= e]
+        for ip in expired:
+            del self.auto_entries[ip]
+        if expired:
+            self._persist()
 
     def block_status(self, ip: str) -> str:
         expiry = self.blocked.get(ip)
@@ -223,7 +262,12 @@ class LiveSessionController:
             return ""
         if expiry == PERMANENT:
             return t("live.blocked")
-        return t("live.blocked_min", m=max(0, int(expiry - self.clock())) // 60 + 1)
+        left = max(0, int(expiry - self.clock()))
+        if left >= 86400:
+            return t("live.blocked_days", d=left // 86400 + 1)
+        if left >= 3600:
+            return t("live.blocked_hours", h=left // 3600 + 1)
+        return t("live.blocked_min", m=left // 60 + 1)
 
 
 LEVEL_COLORS = {
@@ -244,7 +288,7 @@ def render(
         Style.BRIGHT + t("live.title") + Style.RESET_ALL,
         t(
             "live.status",
-            minutes=AUTO_BLOCK_SECONDS // 60,
+            days=AUTO_BLOCK_SECONDS // 86400,
             auto=t("live.on") if ctrl.auto_block else t("live.off"),
             hint="" if ctrl.auto_block else t("live.auto_hint"),
             rec=recording,
@@ -314,6 +358,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
     packets: Queue[Packet] = Queue(QUEUE_MAX)
     from config.globallist import Whitelist
     from menu.menu import Menu  # import tardif : menu.py importe ce module
+    from network import autoblock
     from network.incident import ReportWriter, build_report
 
     monitor = SessionMonitor()
@@ -325,16 +370,22 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
             build_report(monitor.peers.get(ip), ip, kind, time.time(), pseudo)
         )
 
+    guard = make_auto_block_guard(set(Whitelist().ips), Menu.dynamic_blacklist)
+    ranges_ok = bool(Menu.dynamic_blacklist)
+    saver = autoblock.AutoBlockSaver()
     ctrl = LiveSessionController(
         blocked,
         Blacklist(),
         auto_block=bool(config.data.get(AUTO_BLOCK_KEY, AUTO_BLOCK_DEFAULT)),
-        auto_block_guard=make_auto_block_guard(
-            set(Whitelist().ips), Menu.dynamic_blacklist
-        ),
+        auto_block_guard=guard,
         reporter=reporter,
-        auto_block_available=bool(Menu.dynamic_blacklist),
+        auto_block_available=ranges_ok,
+        auto_store=saver,
+        # Lecture une seule fois, avant le démarrage de la capture.
+        auto_entries=autoblock.load(time.time(), guard) if ranges_ok else {},
     )
+    if ranges_ok:
+        saver.request(ctrl.auto_entries)  # réécrit le fichier purgé/filtré
     recorder = MetadataRecorder()
     proc = Process(
         target=capture_loop, args=(blocked, packets, extra_ports_enabled()), daemon=True
@@ -407,6 +458,7 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
     finally:
         recorder.stop()
         writer.close()
+        saver.close()
         proc.terminate()
         proc.join(timeout=5)
         manager.shutdown()
