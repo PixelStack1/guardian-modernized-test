@@ -316,8 +316,14 @@ STRINGS: dict[str, dict[str, str]] = {
     "live.players_full": {"fr": "≥{max}", "en": "≥{max}"},
     "live.no_peers": {"fr": "(aucun pair connecté)", "en": "(no connected peer)"},
     "live.keys": {
-        "fr": "[B]loquer [P]seudo [D]ébloquer [A]uto [T]otal [E]nreg. [↑↓/+-]Page [Q]uitter",
-        "en": "[B]lock [P]Nickname [D]Unblock [A]uto [T]otal [E]Record [↑↓/+-]Page [Q]uit",
+        "fr": "[B]loquer [P]seudo [D]ébloquer [A]uto [T]otal [E]nreg. [↑↓/+-]Page "
+        "[R]etour [Q]uitter",
+        "en": "[B]lock [P]Nickname [D]Unblock [A]uto [T]otal [E]Record [↑↓/+-]Page "
+        "[R]eturn [Q]uit",
+    },
+    "live.bg_status": {
+        "fr": "Protection active en fond (bouclier : {auto}, total : {total})",
+        "en": "Protection running in background (shield: {auto}, total: {total})",
     },
     "live.servers": {"fr": "serveurs Rockstar {n}", "en": "Rockstar servers {n}"},
     "live.rockstar_server": {"fr": "serveur Rockstar", "en": "Rockstar server"},

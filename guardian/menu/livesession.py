@@ -14,6 +14,7 @@ Aucune lecture/modification du jeu, aucun paquet émis vers qui que ce soit.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import logging
 import queue
@@ -929,13 +930,248 @@ def _ask_row(peers: list[PeerState], prompt: str) -> PeerState | None:
     return None
 
 
-def run_live_session() -> None:  # pragma: no cover - interactif, Windows uniquement
-    """Point d'entrée du menu principal."""
-    if sys.platform != "win32":
-        print(t("live.windows_only"))
-        return
-    import msvcrt
+class BackgroundSession:
+    """Protection en direct qui survit à la vue : processus de capture (proc), dicts
+    partagés (Manager), contrôleur (bouclier/total) et un fil léger qui fait ce que
+    faisait la boucle d'affichage pour la protection (paquets, bouclier auto,
+    expirations, purge). [R] quitte la vue en laissant tout tourner ; [Q] arrête."""
 
+    def __init__(
+        self,
+        proc: Any,
+        packets: Any,
+        ctrl: LiveSessionController,
+        monitor: SessionMonitor,
+        counter: PlayerCounter,
+        recorder: Any,
+        closers: list[Callable[[], Any]] | None = None,
+        config: Any = None,
+        blocked: MutableMapping[str, float] | None = None,
+    ) -> None:
+        import threading
+
+        self.proc = proc
+        self.packets = packets
+        self.ctrl = ctrl
+        self.monitor = monitor
+        self.counter = counter
+        self.recorder = recorder
+        self.closers = closers or []
+        self.config = config
+        self.blocked = ctrl.blocked if blocked is None else blocked
+        self.peers: list[PeerState] = []
+        self.now = time.time()
+        self.lock = threading.RLock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._pump, name="live-bg", daemon=True)
+        self.started = False
+        self.stopped = False
+
+    def start(self) -> None:
+        if self.started:
+            return
+        self.started = True
+        self.proc.start()
+        self._thread.start()
+
+    def alive(self) -> bool:
+        if self.stopped:
+            return False
+        try:
+            return bool(self.proc.is_alive())
+        except Exception:
+            return False
+
+    def step(self, timeout: float = 0.02) -> None:
+        """Un paquet au plus, puis évaluation si l'échéance est passée."""
+        try:
+            ts, ip, size, inbound, port = self.packets.get(timeout=timeout)
+            with self.lock:
+                self.recorder.write(ts, ip, size, inbound)
+                note_player(self.counter, ip, inbound)
+                if inbound:
+                    self.monitor.add_packet(ip, size, ts, port)
+        except queue.Empty:
+            pass
+
+    def evaluate(self) -> None:
+        with self.lock:
+            now = time.time()
+            self.ctrl.expire()
+            peers = self.monitor.evaluate(now)
+            for p in peers:
+                try:
+                    self.ctrl.auto_block_if_needed(p)
+                except Exception:
+                    logger.exception("bouclier auto : évaluation impossible")
+            self.monitor.prune(now)
+            self.peers, self.now = peers, now
+
+    def _pump(self) -> None:
+        next_eval = time.monotonic()
+        while not self._stop.is_set():
+            try:
+                self.step()
+                if time.monotonic() >= next_eval:
+                    next_eval = time.monotonic() + EVAL_SECONDS
+                    self.evaluate()
+            except Exception:
+                logger.exception("session en fond : itération impossible")
+                self._stop.wait(0.2)
+
+    def stop(self) -> None:
+        """Arrêt complet, idempotent : fil, enregistrement, rapports, capture, Manager."""
+        if self.stopped:
+            return
+        self.stopped = True
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=2)
+        with contextlib.suppress(Exception):
+            self.recorder.stop()
+        for close in self.closers[:1]:
+            with contextlib.suppress(Exception):
+                close()
+        if self.started:
+            with contextlib.suppress(Exception):
+                self.proc.terminate()
+            with contextlib.suppress(Exception):
+                self.proc.join(timeout=5)
+        for close in self.closers[1:]:
+            with contextlib.suppress(Exception):
+                close()
+
+
+_BACKGROUND: BackgroundSession | None = None
+
+
+def background_session() -> BackgroundSession | None:
+    """Session en fond encore vivante, sinon None (une session morte est nettoyée)."""
+    global _BACKGROUND
+    if _BACKGROUND is not None and not _BACKGROUND.alive():
+        _BACKGROUND.stop()
+        _BACKGROUND = None
+    return _BACKGROUND
+
+
+def attach_or_start(factory: Callable[[], BackgroundSession]) -> BackgroundSession:
+    """Réattache la session en fond si elle tourne (aucun second handle WinDivert),
+    sinon en crée et démarre une nouvelle."""
+    global _BACKGROUND
+    current = background_session()
+    if current is not None:
+        return current
+    session = factory()
+    session.start()
+    _BACKGROUND = session
+    return session
+
+
+def stop_background() -> None:
+    """Arrêt de la session en fond (touche Q, sortie du menu, atexit). Idempotent."""
+    global _BACKGROUND
+    session, _BACKGROUND = _BACKGROUND, None
+    if session is not None:
+        session.stop()
+
+
+def background_status_line() -> str | None:
+    """Ligne du menu principal tant que la protection tourne en fond."""
+    session = background_session()
+    if session is None:
+        return None
+    on, off = t("live.on"), t("live.off")
+    return t(
+        "live.bg_status",
+        auto=on if session.ctrl.auto_block else off,
+        total=on if session.ctrl.total_block else off,
+    )
+
+
+atexit.register(stop_background)
+
+
+def live_view(
+    session: BackgroundSession,
+    getwch: Callable[[], str],
+    kbhit: Callable[[], bool],
+    screen: LiveScreen | None = None,
+    max_frames: int | None = None,
+) -> str:
+    """Vue en direct sur une session (en fond). Renvoie « r » (retour, la protection
+    continue) ou « q » (quitter : l'appelant arrête tout)."""
+    screen = screen or LiveScreen()
+    page = 0
+    frames = 0
+    try:
+        screen.enter()
+        while max_frames is None or frames < max_frames:
+            frames += 1
+            deadline = time.monotonic() + REFRESH_SECONDS
+            while time.monotonic() < deadline and not kbhit():
+                time.sleep(0.02)
+            if not session.alive() and session.started:
+                return "q"
+            ctrl, rec_obj = session.ctrl, session.recorder
+            rec = (
+                t("live.rec_on", path=rec_obj.path) if rec_obj.active else t("live.off")
+            )
+            cols, lines_ = shutil.get_terminal_size((120, 30))
+            with session.lock:
+                peers, now = list(session.peers), session.now
+                try:
+                    page = clamp_page(page, len(peers), lines_, ctrl, session.counter)
+                    frame = render(
+                        session.monitor,
+                        ctrl,
+                        peers,
+                        rec,
+                        now,
+                        session.counter,
+                        size=(cols, lines_),
+                        page=page,
+                    )
+                    prompt_frame = render(
+                        session.monitor,
+                        ctrl,
+                        peers,
+                        rec,
+                        now,
+                        session.counter,
+                        size=(cols, max(3, lines_ - 2)),
+                        page=page,
+                    )
+                except Exception:
+                    logger.exception("live : rendu impossible")
+                    frame = prompt_frame = fit_line(t("live.render_error"), cols)
+            screen.draw(frame)
+            if not kbhit():
+                continue
+            key = read_key(getwch, kbhit)
+            if key in ("q", "r"):
+                return key
+            nav = page_step(key)
+            if nav:
+                page += nav
+                continue
+            prompt = make_prompt(screen, prompt_frame, cols)
+            try:
+                handle_key(
+                    key, ctrl, peers, session.blocked, rec_obj, prompt, session.config
+                )
+            except (EOFError, KeyboardInterrupt):
+                raise
+            except Exception:
+                logger.exception("live : action %r impossible", key)
+                ctrl.events.append(t("live.action_error", action=key.upper()))
+        return "r"
+    except KeyboardInterrupt:
+        return "q"
+    finally:
+        screen.leave()
+
+
+def _create_session() -> BackgroundSession:  # pragma: no cover - Windows uniquement
     from network.recorder import MetadataRecorder
     from network.sessions import extra_ports_enabled
 
@@ -981,111 +1217,37 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
     )
     if ranges_ok:
         saver.request(ctrl.auto_entries)  # réécrit le fichier purgé/filtré
-    recorder = MetadataRecorder()
     proc = Process(
         target=capture_loop,
         args=(blocked, packets, extra_ports_enabled(), total_blocked, total_flag),
         daemon=True,
     )
-    proc.start()
-    screen = LiveScreen()
-    page = 0
-    redraw_now = False
+    return BackgroundSession(
+        proc,
+        packets,
+        ctrl,
+        monitor,
+        player_counter,
+        MetadataRecorder(),
+        # closers[0] avant l'arrêt de la capture, les suivants après.
+        closers=[writer.close, saver.close, manager.shutdown],
+        config=config,
+        blocked=blocked,
+    )
+
+
+def run_live_session() -> None:  # pragma: no cover - interactif, Windows uniquement
+    """Point d'entrée du menu principal : réattache la session en fond si elle tourne."""
+    if sys.platform != "win32":
+        print(t("live.windows_only"))
+        return
+    import msvcrt
+
+    session = attach_or_start(_create_session)
     try:
-        screen.enter()
-        while True:
-            deadline = time.monotonic() + (0.0 if redraw_now else REFRESH_SECONDS)
-            redraw_now = False
-            next_eval = time.monotonic()
-            peers: list[PeerState] = []
-            while True:
-                try:
-                    ts, ip, size, inbound, port = packets.get(timeout=0.02)
-                    recorder.write(ts, ip, size, inbound)
-                    note_player(player_counter, ip, inbound)
-                    if inbound:
-                        monitor.add_packet(ip, size, ts, port)
-                except queue.Empty:
-                    pass
-                if time.monotonic() >= next_eval:
-                    # Bouclier auto évalué toutes les EVAL_SECONDS, pas seulement à l'affichage.
-                    next_eval = time.monotonic() + EVAL_SECONDS
-                    now = time.time()
-                    ctrl.expire()
-                    peers = monitor.evaluate(now)
-                    for p in peers:
-                        try:
-                            ctrl.auto_block_if_needed(p)
-                        except Exception:
-                            logger.exception("bouclier auto : évaluation impossible")
-                    if time.monotonic() >= deadline:
-                        break
-                if msvcrt.kbhit():
-                    break  # réaction immédiate à une touche
-            monitor.prune(now)
-            rec = (
-                t("live.rec_on", path=recorder.path)
-                if recorder.active
-                else t("live.off")
-            )
-            cols, lines_ = shutil.get_terminal_size((120, 30))
-            frame_size = (cols, lines_)
-            try:
-                page = clamp_page(page, len(peers), lines_, ctrl, player_counter)
-                screen.draw(
-                    render(
-                        monitor,
-                        ctrl,
-                        peers,
-                        rec,
-                        now,
-                        player_counter,
-                        size=frame_size,
-                        page=page,
-                    )
-                )
-            except Exception:
-                # Ne jamais laisser l'écran noir : on journalise et on continue.
-                logger.exception("live : rendu impossible")
-                screen.draw(fit_line(t("live.render_error"), cols))
-
-            if not msvcrt.kbhit():
-                continue
-            key = read_key(msvcrt.getwch, msvcrt.kbhit)
-            if key == "q":
-                break
-            redraw_now = True
-            nav = page_step(key)
-            if nav:
-                page += nav
-                continue
-
-            prompt_frame = render(
-                monitor,
-                ctrl,
-                peers,
-                rec,
-                now,
-                player_counter,
-                size=(cols, max(3, lines_ - 2)),
-                page=page,
-            )
-            prompt = make_prompt(screen, prompt_frame, cols)
-
-            try:
-                handle_key(key, ctrl, peers, blocked, recorder, prompt, config)
-            except (EOFError, KeyboardInterrupt):
-                raise
-            except Exception:
-                logger.exception("live : action %r impossible", key)
-                ctrl.events.append(t("live.action_error", action=key.upper()))
-    except KeyboardInterrupt:
-        pass
-    finally:
-        screen.leave()
-        recorder.stop()
-        writer.close()
-        saver.close()
-        proc.terminate()
-        proc.join(timeout=5)
-        manager.shutdown()
+        result = live_view(session, msvcrt.getwch, msvcrt.kbhit)
+    except BaseException:
+        stop_background()
+        raise
+    if result == "q":
+        stop_background()

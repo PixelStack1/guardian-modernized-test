@@ -54,8 +54,20 @@ class Menu:
 
     @staticmethod
     def main_menu() -> None:
+        from menu.livesession import background_status_line, stop_background
+
+        try:
+            Menu._main_menu_loop(background_status_line)
+        finally:
+            stop_background()  # sortie du programme : jamais de processus orphelin
+
+    @staticmethod
+    def _main_menu_loop(status: Any) -> None:
         while True:
             try:
+                line = status()
+                if line:
+                    pretty_print(line)
                 answer = questionary.select(
                     t("menu.question"), Prompts.main_menu(), style=UI_STYLE
                 ).ask()

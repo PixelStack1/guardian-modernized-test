@@ -171,29 +171,31 @@ def test_capture_loop_untouched_and_metadata_only():
 
 
 def test_display_loop_feeds_counter_with_direction_and_renders_it():
+    """La session en fond (step) alimente le compteur avec la direction ; la vue
+    (live_view) le passe à render()."""
     import ast
 
-    run = _func("run_live_session")
+    step = _func("step")
     feeds = [
         c
-        for c in ast.walk(run)
+        for c in ast.walk(step)
         if isinstance(c, ast.Call)
         and isinstance(c.func, ast.Name)
         and c.func.id == "note_player"
     ]
     assert len(feeds) == 1
-    assert [a.id for a in feeds[0].args] == ["player_counter", "ip", "inbound"]
-    assert "seen" not in _names(run)  # jamais d'appel direct sans direction
+    assert [ast.unparse(a) for a in feeds[0].args] == ["self.counter", "ip", "inbound"]
+    assert "seen" not in _names(step)  # jamais d'appel direct sans direction
+    view = _func("live_view")
     renders = [
         c
-        for c in ast.walk(run)
+        for c in ast.walk(view)
         if isinstance(c, ast.Call)
         and isinstance(c.func, ast.Name)
         and c.func.id == "render"
     ]
     assert renders and all(
-        any(isinstance(a, ast.Name) and a.id == "player_counter" for a in c.args)
-        for c in renders
+        any(ast.unparse(a) == "session.counter" for a in c.args) for c in renders
     )
 
 
