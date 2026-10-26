@@ -19,7 +19,7 @@ import platform
 import queue
 import threading
 from collections import deque
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -44,13 +44,28 @@ def reports_dir() -> Path:
     return data_dir() / "rapports"
 
 
+def _local_dt(ts: float) -> datetime | None:
+    """Datetime local sans jamais lever (Windows refuse les ts proches de l'époque)."""
+    try:
+        return datetime.fromtimestamp(ts, tz=UTC).astimezone()
+    except (OSError, OverflowError, ValueError):
+        try:
+            return datetime.fromtimestamp(ts, tz=UTC)
+        except (OSError, OverflowError, ValueError):
+            return None
+
+
 def _clock(ts: float) -> str:
     """Heure locale lisible (HH:MM:SS.mmm) pour l'extrait de fenêtre."""
-    return datetime.fromtimestamp(ts).astimezone().strftime("%H:%M:%S.%f")[:-3]
+    dt = _local_dt(ts)
+    return dt.strftime("%H:%M:%S.%f")[:-3] if dt else "??:??:??.???"
 
 
 def _iso(ts: float) -> str:
-    return datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds")
+    dt = _local_dt(ts)
+    if dt is None:
+        return "1970-01-01T00:00:00+00:00"
+    return dt.isoformat(timespec="seconds")
 
 
 def build_report(
@@ -68,7 +83,7 @@ def build_report(
             peer.anomaly_since if anomalous and peer.anomaly_since else peer.first_seen
         )
     start = min(start, now)
-    stamp = datetime.fromtimestamp(now).strftime("%Y%m%d-%H%M%S")
+    stamp = (_local_dt(now) or datetime.now(UTC)).strftime("%Y%m%d-%H%M%S")
     digest = hashlib.sha256(f"{ip}|{now!r}|{kind}".encode()).hexdigest()[:8]
     cc = country_code(ip)
     report: dict[str, Any] = {

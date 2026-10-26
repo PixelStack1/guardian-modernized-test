@@ -262,3 +262,11 @@ def test_report_writer_survives_write_errors(tmp_path):
     w.submit(incident.build_report(None, "203.0.113.2", "manual", 2.0))
     w.close()
     assert not w._thread.is_alive() and len(w.written) == 0
+
+
+def test_iso_never_raises_on_extreme_timestamps() -> None:
+    from guardian.network.incident import _clock, _iso
+
+    for ts in (0.0, 1.0, 1e18, -1e18):
+        assert isinstance(_iso(ts), str)
+        assert isinstance(_clock(ts), str)

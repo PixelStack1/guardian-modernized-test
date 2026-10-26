@@ -21,7 +21,7 @@ import queue
 import sys
 import time
 from collections.abc import Callable, MutableMapping
-from datetime import datetime
+from datetime import UTC, datetime
 from multiprocessing import Manager, Process, Queue, Value
 from typing import Any
 
@@ -568,7 +568,14 @@ def render(
         state = ctrl.block_status(p.ip) or (
             t("level.learning") if p.learning(now) else t(LEVEL_KEYS[Level(p.level)])
         )
-        first = datetime.fromtimestamp(p.first_seen).strftime("%H:%M:%S")
+        try:
+            first = (
+                datetime.fromtimestamp(p.first_seen, tz=UTC)
+                .astimezone()
+                .strftime("%H:%M:%S")
+            )
+        except (OSError, OverflowError, ValueError):
+            first = "??:??:??"
         row = (
             f"{i:>2}  {p.ip:<15}  {country_label(p.ip):<5}  {first:<10}  "
             f"{s.pps:>6.0f}  {s.bps:>8.0f}  {s.avg_size:>5.0f}  {s.max_size:>5}  "
