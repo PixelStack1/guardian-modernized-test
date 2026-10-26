@@ -22,7 +22,7 @@ mypy = "^1.18"
 types-colorama = "^0.4.15"
 types-tqdm = "^4.67"
 types-requests = "^2.32"
-pytest = "^8.4"
+pytest = "^9.1"
 
 [tool.ruff]
 line-length = 88
