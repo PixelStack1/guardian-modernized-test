@@ -1,4 +1,5 @@
 import contextlib
+import ipaddress
 import socket
 from typing import cast
 
@@ -7,9 +8,18 @@ import requests
 from util.constants import CIDR_MASKS
 from util.types import CIDR_BLOCK
 
+MIN_CIDR_PREFIXLEN = 8
 
-def get_public_ip() -> str:
-    return requests.get("https://api.ipify.org", timeout=10).text
+
+def get_public_ip() -> str | None:
+    """Public IPv4 via ipify; None on any error or if the answer is not a valid IPv4 address."""
+    try:
+        response = requests.get("https://api.ipify.org", timeout=10, stream=True)
+        response.raise_for_status()
+        text = response.raw.read(64, decode_content=True).decode("ascii", "replace")
+        return str(ipaddress.IPv4Address(text.strip()))
+    except Exception:
+        return None
 
 
 def get_private_ip() -> str:
@@ -50,12 +60,13 @@ def cidr_to_tuple(ip_in_cidr: str) -> CIDR_BLOCK:
     the first integer represents the lowest IP in the CIDR block,
     and the second integer represents the mask (just the suffix)
 
-    NOTE: Does *not* check for the validity of a CIDR block. Example, 255.255.255.255/1 would be accepted, but is not
-    a valid CIDR block.
+    Validated with ipaddress.IPv4Network(strict=False): host bits are masked off,
+    malformed input raises ValueError, and prefixes broader than /8 are rejected.
     """
-    ip, suffix = ip_in_cidr.split("/")
-    suffix_int = int(suffix)
-    return calculate_ip_to_int(ip), suffix_int
+    network = ipaddress.IPv4Network(ip_in_cidr.strip(), strict=False)
+    if network.prefixlen < MIN_CIDR_PREFIXLEN:
+        raise ValueError(f"CIDR block too broad: {ip_in_cidr}")
+    return int(network.network_address), network.prefixlen
 
 
 def construct_cidr_block_set(ips_in_cidr: list[str]) -> set[CIDR_BLOCK]:
@@ -67,7 +78,7 @@ def construct_cidr_block_set(ips_in_cidr: list[str]) -> set[CIDR_BLOCK]:
     """
     ip_set = set()
     for ip_cidr in ips_in_cidr:
-        with contextlib.suppress(ValueError):
+        with contextlib.suppress(ValueError, IndexError):
             # [0] is IP as integer, [1] is subnet mask in /xy notation (only xy)
             ip_set.add(cidr_to_tuple(ip_cidr))
     return ip_set

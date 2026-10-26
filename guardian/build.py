@@ -10,6 +10,7 @@ def build() -> None:
         (
             os.path.join("guardian", "__main__.py"),
             "--onefile",
+            "--noupx",
             "--icon",
             "logo.ico",
             "--uac-admin",

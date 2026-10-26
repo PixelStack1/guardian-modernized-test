@@ -121,7 +121,7 @@ class Menu:
             priority=Menu.context.priority,
             connection=Menu.child_conn,
             blocks=Menu.dynamic_blacklist,
-            known_allowed={PRIVATE_IP, PUBLIC_IP},
+            known_allowed={ip for ip in (PRIVATE_IP, PUBLIC_IP) if ip},
         )
 
     @staticmethod

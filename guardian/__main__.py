@@ -8,6 +8,7 @@ import pydivert
 from menu.menu import Menu
 from util.crash import crash_report
 from util.driver import DriverLifecycle
+from util.paths import data_file
 from util.printer import print_white
 
 __version__ = "3.6.0.dev0"
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 logger.propagate = False
 logger.setLevel(logging.INFO)
 if not logger.handlers:
-    fh = logging.FileHandler(filename="history.log")
+    fh = logging.FileHandler(filename=data_file("history.log"))
     fh.setLevel(logging.INFO)
     formatter = logging.Formatter(
         "[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
@@ -27,7 +28,7 @@ if not logger.handlers:
 debug_logger = logging.getLogger("debugger")
 debug_logger.setLevel(logging.DEBUG)
 if not debug_logger.handlers:
-    fh = logging.FileHandler("debugger.log")
+    fh = logging.FileHandler(data_file("debugger.log"))
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(
         logging.Formatter(

@@ -163,3 +163,9 @@ cython_debug/
 data.json
 db.json
 *.zip
+
+# Guardian user data
+data.json
+db.json
+history.log
+debugger.log
