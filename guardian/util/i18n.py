@@ -54,8 +54,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Session open: players can join normally.",
     },
     "host_first.failed": {
-        "fr": "Le filtre n'a pas pu démarrer (WinDivert). Lance Guardian en administrateur.",
-        "en": "The filter could not start (WinDivert). Run Guardian as administrator.",
+        "fr": "Le filtre n'a pas pu démarrer (WinDivert) : aucun filtre n'est actif. Lance Guardian en administrateur.",
+        "en": "The filter could not start (WinDivert): no filter is active. Run Guardian as administrator.",
     },
     "menu.kick_by_ip": {"fr": "Expulser par IP", "en": "Kick by IP"},
     "menu.live": {"fr": "Session en direct (test)", "en": "Live session (test)"},

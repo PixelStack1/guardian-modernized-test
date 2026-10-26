@@ -441,3 +441,37 @@ def test_menu_shows_error_and_returns_on_failure():
     assert "WinDivert" in i18n.STRINGS["host_first.failed"]["fr"]
     assert "administrateur" in i18n.STRINGS["host_first.failed"]["fr"]
     assert "administrator" in i18n.STRINGS["host_first.failed"]["en"]
+
+
+def test_failed_text_says_no_filter_active():
+    from guardian.util import i18n
+
+    assert "aucun filtre n'est actif" in i18n.STRINGS["host_first.failed"]["fr"]
+    assert "no filter is active" in i18n.STRINGS["host_first.failed"]["en"]
+
+
+@pytest.mark.parametrize("alive", [[False], [True, False]])
+def test_dead_process_keeps_pending_failure_reason(conn, alive):
+    from multiprocessing import Pipe
+
+    from guardian.menu.hostfirst import FilterStartFailed, wait_until_started
+
+    parent, child = Pipe()
+    child.send((s.HOST_FIRST_FAILED, "FilterOpenError: access denied"))
+    states = iter(alive)
+    sess = make(conn, Clock())
+    with pytest.raises(FilterStartFailed, match="FilterOpenError: access denied"):
+        wait_until_started(
+            sess, parent, timeout=0, is_alive=lambda: next(states, False)
+        )
+
+
+def test_dead_process_recv_errors_are_protected(conn):
+    from guardian.menu.hostfirst import FilterStartFailed, wait_until_started
+
+    for exc in (EOFError, OSError):
+        broken = mock.MagicMock()
+        broken.poll.return_value = True
+        broken.recv.side_effect = exc
+        with pytest.raises(FilterStartFailed, match="process not alive"):
+            wait_until_started(make(conn, Clock()), broken, is_alive=lambda: False)

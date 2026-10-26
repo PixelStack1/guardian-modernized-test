@@ -58,6 +58,18 @@ def valid_duration(value: Any) -> float | None:
     return None
 
 
+def _dead_reason(conn: Any) -> str:
+    """Processus mort : récupère un éventuel (HOST_FIRST_FAILED, raison) en attente."""
+    try:
+        while conn.poll(0):
+            msg = conn.recv()
+            if isinstance(msg, tuple) and len(msg) == 2 and msg[0] == HOST_FIRST_FAILED:
+                return str(msg[1])
+    except (EOFError, OSError):
+        pass
+    return "process not alive"
+
+
 def wait_until_started(
     session: HostFirstSession,
     conn: Any,
@@ -72,7 +84,7 @@ def wait_until_started(
     deadline = clock() + timeout
     while True:
         if is_alive is not None and not is_alive():
-            raise FilterStartFailed("process not alive")
+            raise FilterStartFailed(_dead_reason(conn))
         left = deadline - clock()
         if left <= 0:
             break
@@ -91,6 +103,6 @@ def wait_until_started(
             session.open_at = session.clock() + duration
             return True
     if is_alive is not None and not is_alive():
-        raise FilterStartFailed("process not alive")
+        raise FilterStartFailed(_dead_reason(conn))
     session.open_at = session.clock() + session.duration
     return False
