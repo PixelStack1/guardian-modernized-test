@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   push:
     branches: [ modernize, main ]
+  pull_request:
+    branches: [ main ]
 
 permissions:
   contents: read
