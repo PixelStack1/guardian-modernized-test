@@ -137,10 +137,31 @@ results["drop_reinject_ok"] = sorted(received) == [12, 18]
 
 time.sleep(2)
 results["sc_after_close"] = sc_query()
+
+# 4. Guardian DriverLifecycle with the real driver: stop it first, let Guardian load it, then clean up.
+from util.driver import DriverLifecycle  # noqa: E402
+
+subprocess.run(["sc", "stop", "WinDivert"], capture_output=True)
+time.sleep(3)
+results["lifecycle_sc_before"] = sc_query()
+lc = DriverLifecycle(pydivert.WinDivert)
+lc.start()
+with pydivert.WinDivert(
+    "udp.DstPort == 6672 and ip.DstAddr == 127.0.0.1", flags=pydivert.Flag.SNIFF
+):
+    results["lifecycle_sc_loaded"] = sc_query()
+lc.cleanup()
+time.sleep(3)
+results["lifecycle_loaded_by_guardian"] = lc.loaded_by_guardian
+results["lifecycle_sc_after_cleanup"] = sc_query()
+results["lifecycle_ok"] = (
+    lc.loaded_by_guardian and "RUNNING" not in results["lifecycle_sc_after_cleanup"]
+)
 print(json.dumps(results, indent=2))
 ok = (
     all(v["ok"] for k, v in results.items() if k.startswith("capture_"))
     and results["filter_ok"]
     and results["drop_reinject_ok"]
+    and results["lifecycle_ok"]
 )
 sys.exit(0 if ok else 1)

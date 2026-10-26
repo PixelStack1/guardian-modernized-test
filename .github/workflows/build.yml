@@ -13,22 +13,20 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref }}
       - name: Install poetry
         run: pipx install poetry
       - name: Set up Python 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: "poetry"
-      - name: Install Poetry
-        run: python -m pip install --user poetry
       - name: Install dependencies
         run: poetry install --no-interaction --no-root
       - name: Install UPX
-        uses: crazy-max/ghaction-upx@v3
+        uses: crazy-max/ghaction-upx@v4
         with:
           install-only: true
       - name: Lint and test
@@ -37,13 +35,9 @@ jobs:
           poetry run mypy guardian
           poetry run pytest -q
       - name: Build executable
-        run: poetry run build
-      - uses: actions/upload-artifact@v4
+        run: poetry run python -c "from guardian.build import build; build()"
+      - uses: actions/upload-artifact@v7
         with:
           name: Guardian
           path: dist/Guardian-*.exe
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: dist/Guardian-*.exe
-        if: startsWith(github.ref, 'refs/tags/')
+      # Release publishing intentionally removed in this fork (never publish from CI here).

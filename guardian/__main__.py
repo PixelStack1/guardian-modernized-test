@@ -7,6 +7,7 @@ import pydivert
 
 from menu.menu import Menu
 from util.crash import crash_report
+from util.driver import DriverLifecycle
 from util.printer import print_white
 
 __version__ = "3.6.0.dev0"
@@ -47,17 +48,23 @@ if __name__ == "__main__":
             input("Press enter to exit.")
             sys.exit()
         print_white("Initialising...")
-        if not pydivert.WinDivert.is_registered():
-            pydivert.WinDivert.register()
+        driver = DriverLifecycle(pydivert.WinDivert)
+        driver.start()
         ctypes.windll.kernel32.SetConsoleTitleW(f"Guardian {__version__}")
     except Exception as e:
         crash_report(e, "Guardian crashed before reaching main()")
         raise
 
     try:
-        Menu.main_menu()
+        if "--self-test-exit" in sys.argv:
+            # Non-interactive quit path used by CI: initialise (driver loaded), then exit normally.
+            print_white("Self-test: initialised, exiting normally")
+        else:
+            Menu.main_menu()
     except KeyboardInterrupt:
         pass
     except Exception as e:
         crash_report(e, "Guardian crashed in main()")
         raise
+    finally:
+        driver.cleanup()

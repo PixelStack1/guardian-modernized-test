@@ -12,8 +12,8 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - name: Install poetry + deps
@@ -46,7 +46,7 @@ jobs:
           exit 0  # sc.exe returns 1060 when the service is absent (expected); results are in the log
       - name: Install UPX
         if: always()
-        uses: crazy-max/ghaction-upx@v3
+        uses: crazy-max/ghaction-upx@v4
         with:
           install-only: true
       - name: Build exe
@@ -64,7 +64,27 @@ jobs:
           Start-Sleep -Seconds 2
           sc.exe query WinDivert 2>&1 | Tee-Object -Append logs/exe_launch.txt
           exit 0
-      - uses: actions/upload-artifact@v4
+      - name: Exe normal exit -> driver must be removed
+        if: always()
+        run: |
+          sc.exe stop WinDivert 2>&1 | Out-Null
+          Start-Sleep -Seconds 3
+          "before:" | Tee-Object logs/exe_exit_driver.txt
+          sc.exe query WinDivert 2>&1 | Tee-Object -Append logs/exe_exit_driver.txt
+          $exe = Get-ChildItem dist/Guardian-*.exe | Select-Object -First 1
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList "--self-test-exit" -PassThru -RedirectStandardOutput logs/exe_selftest_stdout.txt -RedirectStandardError logs/exe_selftest_stderr.txt
+          if (-not $p.WaitForExit(60000)) { Stop-Process -Id $p.Id -Force; "TIMEOUT (own PID $($p.Id) stopped)" | Tee-Object -Append logs/exe_exit_driver.txt; exit 1 }
+          "exe exit code: $($p.ExitCode)" | Tee-Object -Append logs/exe_exit_driver.txt
+          Get-Content logs/exe_selftest_stdout.txt, logs/exe_selftest_stderr.txt | Tee-Object -Append logs/exe_exit_driver.txt
+          Get-Content history.log -ErrorAction SilentlyContinue | Tee-Object -Append logs/exe_exit_driver.txt
+          Start-Sleep -Seconds 3
+          "after:" | Tee-Object -Append logs/exe_exit_driver.txt
+          $q = (sc.exe query WinDivert 2>&1 | Out-String)
+          $q | Tee-Object -Append logs/exe_exit_driver.txt
+          if ($q -match "RUNNING") { "FAIL: WinDivert still running after Guardian exit" | Tee-Object -Append logs/exe_exit_driver.txt; exit 1 }
+          if ($p.ExitCode -ne 0) { exit 1 }
+          "OK: WinDivert not running after Guardian exit" | Tee-Object -Append logs/exe_exit_driver.txt
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: guardian-windows-results
