@@ -35,6 +35,13 @@ jobs:
         run: |
           sc.exe query WinDivert 2>&1 | Tee-Object logs/sc_after_exit.txt
           driverquery | Select-String -Pattern WinDivert | Tee-Object -Append logs/sc_after_exit.txt
+          Start-Sleep -Seconds 15
+          "--- after 15 s more ---" | Tee-Object -Append logs/sc_after_exit.txt
+          sc.exe query WinDivert 2>&1 | Tee-Object -Append logs/sc_after_exit.txt
+          "--- explicit sc stop WinDivert (documented manual cleanup) ---" | Tee-Object -Append logs/sc_after_exit.txt
+          sc.exe stop WinDivert 2>&1 | Tee-Object -Append logs/sc_after_exit.txt
+          Start-Sleep -Seconds 3
+          sc.exe query WinDivert 2>&1 | Tee-Object -Append logs/sc_after_exit.txt
           "exit-check-done" | Tee-Object -Append logs/sc_after_exit.txt
       - name: Install UPX
         uses: crazy-max/ghaction-upx@v3
@@ -42,7 +49,7 @@ jobs:
           install-only: true
       - name: Build exe
         if: always()
-        run: poetry run build 2>&1 | Tee-Object logs/build.txt; exit $LASTEXITCODE
+        run: poetry run python -c "from guardian.build import build; build()" 2>&1 | Tee-Object logs/build.txt; exit $LASTEXITCODE
       - name: Smoke-launch exe (20 s, stdin closed)
         if: always()
         run: |
