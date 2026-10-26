@@ -1,4 +1,4 @@
-"""Per-user data directory: %LOCALAPPDATA%\\Guardian on Windows (fallback: current directory)."""
+"""Per-user data directory: %LOCALAPPDATA%\\Guardian on Windows (fallback: ~/Guardian on non-Windows)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 def data_dir() -> Path:
     base = os.environ.get("LOCALAPPDATA")
-    path = Path(base) / "Guardian" if base else Path.cwd()
+    path = (Path(base) if base else Path.home()) / "Guardian"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

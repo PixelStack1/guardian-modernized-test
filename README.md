@@ -132,7 +132,7 @@ sc stop WinDivert
 ```
 
 User data (`data.json`, `db.json`, `history.log`, `debugger.log`) is stored in
-`%LOCALAPPDATA%\Guardian` (legacy files in the working directory are copied there once).
+`%LOCALAPPDATA%\Guardian` (fallback `~/Guardian` on non-Windows; legacy files in the working directory are copied there once).
 
 ## Hardening
 
@@ -147,3 +147,27 @@ User data (`data.json`, `db.json`, `history.log`, `debugger.log`) is stored in
   If the filter cannot be opened, Guardian exits cleanly with a message.
 - **IP lists**: the last good RIPE/Azure lists are cached; a new list that is empty, malformed or more than
   30% different from the previous one is rejected and the previous list is kept.
+
+## Fermer le pilote WinDivert avant de jouer à un autre jeu en ligne / Closing the WinDivert driver before playing another online game
+
+**Français**
+
+- Le pilote WinDivert n'est chargé que pendant que Guardian tourne. Lors d'une fermeture normale
+  (quitter, Ctrl+C), Guardian le décharge désormais automatiquement.
+- Après un crash ou un arrêt forcé (Gestionnaire des tâches, coupure), il peut rester chargé jusqu'au redémarrage.
+- **Vérifier** : ouvrir `cmd` **en tant qu'administrateur** puis taper `sc query WinDivert`.
+  Si le service est absent (« FAILED 1060 »), le pilote n'est pas chargé.
+- **Arrêter** : `sc stop WinDivert`, puis `sc query WinDivert` doit afficher `STOPPED` ou un service absent.
+- **Le plus sûr** avant un jeu avec anti-triche noyau (Valorant/Vanguard, BattlEye, Easy Anti-Cheat) :
+  redémarrer le PC, puis vérifier avec `sc query WinDivert`.
+
+**English**
+
+- The WinDivert driver is only loaded while Guardian runs. On a clean exit (quit, Ctrl+C), Guardian now
+  unregisters it automatically.
+- After a crash or a forced kill (Task Manager, power loss), it may stay loaded until you reboot.
+- **Check**: open `cmd` **as administrator** and run `sc query WinDivert`.
+  If the service is absent ("FAILED 1060"), the driver is not loaded.
+- **Stop**: `sc stop WinDivert`, then `sc query WinDivert` should show `STOPPED` or an absent service.
+- **Safest** before games with kernel anti-cheat (Valorant/Vanguard, BattlEye, Easy Anti-Cheat):
+  reboot, then check with `sc query WinDivert`.
