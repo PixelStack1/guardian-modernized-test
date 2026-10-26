@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import queue
+import re
+import shutil
 import sys
 import time
 from collections.abc import Callable, MutableMapping
@@ -30,7 +31,7 @@ from colorama import Fore, Style
 from config.configdata import ConfigData
 from config.globallist import Blacklist
 from network.anomaly import LEVEL_KEYS, Level, PeerState, SessionMonitor
-from util.geoip import country_label
+from util.geoip import country_code
 from util.i18n import t
 
 # Priorité WinDivert du handle de la vue en direct (plus haute = vu en premier).
@@ -519,15 +520,10 @@ LEVEL_COLORS = {
 }
 
 
-def render(
-    monitor: SessionMonitor,
-    ctrl: LiveSessionController,
-    peers: list[PeerState],
-    recording: str,
-    now: float,
-    players: PlayerCounter | None = None,
-) -> str:
-    lines = [
+def render_head(
+    ctrl: LiveSessionController, recording: str, players: PlayerCounter | None = None
+) -> list[str]:
+    return [
         Style.BRIGHT + t("live.title") + Style.RESET_ALL,
         *([players_line(players, ctrl)] if players is not None else []),
         t(
@@ -562,6 +558,22 @@ def render(
             state=t("live.col.state"),
         ),
     ]
+
+
+def render(
+    monitor: SessionMonitor,
+    ctrl: LiveSessionController,
+    peers: list[PeerState],
+    recording: str,
+    now: float,
+    players: PlayerCounter | None = None,
+    size: tuple[int, int] | None = None,
+    page: int = 0,
+) -> str:
+    """Frame complète. Avec ``size=(colonnes, lignes)``, la frame tient dans la fenêtre :
+    en-tête en haut, barre de touches en bas, tableau paginé, lignes tronquées."""
+    head = render_head(ctrl, recording, players)
+    rows: list[str] = []
     alerts = []
     for i, p in enumerate(peers, 1):
         s = p.window.stats(now)
@@ -577,19 +589,280 @@ def render(
         except (OSError, OverflowError, ValueError):
             first = "??:??:??"
         row = (
-            f"{i:>2}  {p.ip:<15}  {country_label(p.ip):<5}  {first:<10}  "
+            f"{i:>2}  {p.ip:<15}  {(country_code(p.ip) or '—'):<5}  {first:<10}  "
             f"{s.pps:>6.0f}  {s.bps:>8.0f}  {s.avg_size:>5.0f}  {s.max_size:>5}  "
             f"{state:<10}  {ctrl.pseudos.get(p.ip, '')}"
         )
         color = LEVEL_COLORS[p.level]
-        lines.append(color + row + Style.RESET_ALL if color else row)
+        rows.append(color + row + Style.RESET_ALL if color else row)
         if p.alert:
             alerts.append(color + p.alert + Style.RESET_ALL)
     if not peers:
-        lines.append(t("live.no_peers"))
-    lines += ["", *alerts, *ctrl.events[-5:], ""]
-    lines.append(t("live.keys"))
-    return "\n".join(lines)
+        rows.append(t("live.no_peers"))
+    tail = ["", *alerts, *ctrl.events[-5:], "", t("live.keys")]
+    if size is None:
+        return "\n".join(head + rows + tail)
+    width, height = size
+    return "\n".join(
+        fit_line(line, width)
+        for line in fit_frame(head, rows, tail, height, page, len(peers))
+    )
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def fit_line(line: str, width: int) -> str:
+    """Tronque à ``width - 1`` caractères visibles (séquences ANSI ignorées) pour ne
+    jamais déclencher le retour à la ligne automatique de la console."""
+    limit = max(1, width - 1)
+    out: list[str] = []
+    visible = 0
+    pos = 0
+    truncated = False
+    while pos < len(line):
+        m = _ANSI.match(line, pos)
+        if m:
+            out.append(m.group())
+            pos = m.end()
+            continue
+        if visible >= limit:
+            truncated = True
+            break
+        out.append(line[pos])
+        visible += 1
+        pos += 1
+    result = "".join(out)
+    if truncated and "\x1b[" in result:
+        result += Style.RESET_ALL
+    return result
+
+
+def paginate(total: int, per_page: int, page: int) -> tuple[int, int, int, int]:
+    """(début, fin, page bornée, nombre de pages) — indices 0-based, fin exclue."""
+    per_page = max(1, per_page)
+    pages = max(1, -(-total // per_page))
+    page = min(max(0, page), pages - 1)
+    start = page * per_page
+    return start, min(total, start + per_page), page, pages
+
+
+def fit_frame(
+    head: list[str],
+    rows: list[str],
+    tail: list[str],
+    height: int,
+    page: int,
+    total: int,
+) -> list[str]:
+    """Assemble une frame d'au plus ``height`` lignes : en-tête toujours en haut,
+    barre de touches toujours en bas, tableau paginé entre les deux."""
+    height = max(3, height)
+    keys = tail[-1:]
+    extra = tail[:-1]
+    # Lignes réservées : en-tête + ligne de pagination + touches ; le reste au tableau,
+    # puis aux alertes/événements seulement s'il reste de la place.
+    head = head[: max(1, height - 2)]
+    budget = height - len(head) - len(keys) - 1
+    if total == 0:
+        body = rows[: max(0, budget)]
+        pager: list[str] = []
+        budget += 1
+    else:
+        per_page = max(1, budget)
+        start, end, page, pages = paginate(total, per_page, page)
+        body = rows[start:end]
+        pager = [
+            t(
+                "live.page",
+                first=start + 1,
+                last=end,
+                total=total,
+                page=page + 1,
+                pages=pages,
+            )
+        ]
+    room = height - len(head) - len(body) - len(pager) - len(keys)
+    frame = head + body + pager + (extra[:room] if room > 0 else []) + keys
+    return frame[:height] if len(frame) > height else frame
+
+
+def rows_per_page(height: int, head_len: int) -> int:
+    """Nombre de joueurs affichés par page pour une hauteur de fenêtre donnée."""
+    return max(1, max(3, height) - min(head_len, max(1, height - 2)) - 2)
+
+
+ALT_ON = "\x1b[?1049h\x1b[?25l"
+ALT_OFF = "\x1b[?25h\x1b[?1049l"
+HOME = "\x1b[H"
+EOL = "\x1b[K"
+EOS = "\x1b[J"
+
+
+def enable_vt_mode() -> bool:
+    """Active les séquences VT (ENABLE_VIRTUAL_TERMINAL_PROCESSING) sur la console
+    Windows ; sans effet ailleurs. Ne lève jamais."""
+    try:
+        import colorama
+
+        colorama.just_fix_windows_console()
+    except Exception:
+        logger.debug("colorama.just_fix_windows_console indisponible", exc_info=True)
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined,unused-ignore]
+        handle = k32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if not k32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(k32.SetConsoleMode(handle, mode.value | 0x0004))
+    except Exception:
+        logger.debug("SetConsoleMode impossible", exc_info=True)
+        return False
+
+
+class LiveScreen:
+    """Écran alternatif : la vue est redessinée sur place, sans remplir l'historique."""
+
+    def __init__(self, out: Any = None) -> None:
+        self.out = out if out is not None else sys.stdout
+        self.active = False
+
+    def write(self, text: str) -> None:
+        self.out.write(text)
+        self.out.flush()
+
+    def enter(self) -> None:
+        enable_vt_mode()
+        self.write(ALT_ON + HOME + "\x1b[2J")
+        self.active = True
+
+    def draw(self, frame: str) -> None:
+        body = (EOL + "\n").join(frame.split("\n"))
+        self.write(HOME + body + EOL + EOS)
+
+    def leave(self) -> None:
+        if self.active:
+            self.active = False
+            with contextlib.suppress(Exception):
+                self.write(Style.RESET_ALL + ALT_OFF)
+
+
+PAGE_KEYS = {"pgdn": 1, "down": 1, "+": 1, "pgup": -1, "up": -1, "-": -1}
+_SPECIAL = {"I": "pgup", "Q": "pgdn", "H": "up", "P": "down"}
+
+
+def read_key(getwch: Callable[[], str], kbhit: Callable[[], bool]) -> str:
+    """Lit une touche ; les touches spéciales (préfixe \\x00 / \\xe0) deviennent
+    « pgup », « pgdn », « up », « down »."""
+    key = getwch()
+    if key in ("\x00", "\xe0"):
+        code = getwch() if kbhit() else ""
+        return _SPECIAL.get(code, "")
+    return key.lower()
+
+
+def page_step(key: str) -> int:
+    return PAGE_KEYS.get(key, 0)
+
+
+def clamp_page(
+    page: int,
+    total: int,
+    height: int,
+    ctrl: LiveSessionController,
+    players: PlayerCounter | None = None,
+) -> int:
+    head = render_head(ctrl, "", players)
+    return paginate(total, rows_per_page(height, len(head)), page)[2]
+
+
+def handle_key(
+    key: str,
+    ctrl: LiveSessionController,
+    peers: list[PeerState],
+    blocked: MutableMapping[str, float],
+    recorder: Any,
+    prompt: Callable[[str], str],
+    config: Any = None,
+) -> None:
+    """Action d'une touche de la vue en direct. Les bascules A/T n'affichent aucune
+    invite : l'état change, est sauvegardé et la frame suivante l'affiche."""
+    if key == "b":
+        peer = _pick(peers, prompt(t("live.ask_block")))
+        if peer:
+            ctrl.block(peer.ip, prompt(t("live.ask_pseudo")))
+    elif key == "p":
+        peer = _pick(peers, prompt(t("live.ask_row")))
+        if peer:
+            ctrl.pseudos[peer.ip] = prompt(t("live.ask_pseudo_for", ip=peer.ip)).strip()
+    elif key == "d":
+        ips = list(blocked.keys())
+        listing = "\n".join(
+            f"{i:>2}  {ip}  {ctrl.block_status(ip)}" for i, ip in enumerate(ips, 1)
+        )
+        answer = prompt(
+            (listing + "\n" if listing else "") + t("live.ask_unblock")
+        ).strip()
+        if answer.isdigit() and 1 <= int(answer) <= len(ips):
+            ctrl.unblock(ips[int(answer) - 1])
+    elif key == "a":
+        ctrl.toggle_auto_block()
+        _save(config, AUTO_BLOCK_KEY, ctrl.auto_block)
+        ctrl.events.append(
+            t(
+                "live.ev.auto_toggled",
+                state=t("live.on") if ctrl.auto_block else t("live.off"),
+            )
+        )
+    elif key == "t":
+        ctrl.toggle_total_block()
+        _save(config, TOTAL_BLOCK_KEY, ctrl.total_block)
+        ctrl.events.append(
+            t(
+                "live.ev.total_toggled",
+                state=t("live.on") if ctrl.total_block else t("live.off"),
+            )
+        )
+    elif key == "e":
+        if recorder.active:
+            recorder.stop()
+        else:
+            recorder.start()
+
+
+def make_prompt(screen: LiveScreen, frame: str, cols: int) -> Callable[[str], str]:
+    """Invite affichée sous une frame réduite : en-tête et tableau restent visibles."""
+
+    def prompt(text: str) -> str:
+        screen.draw(frame)
+        screen.write("\n\x1b[?25h")  # curseur visible pendant la saisie
+        try:
+            return input(fit_line(text, cols))
+        finally:
+            screen.write("\x1b[?25l")
+
+    return prompt
+
+
+def _save(config: Any, key: str, value: bool) -> None:
+    if config is None:
+        return
+    try:
+        config.data[key] = bool(value)
+        config.save()
+    except Exception:
+        logger.debug("sauvegarde de %s impossible", key, exc_info=True)
+
+
+def _pick(peers: list[PeerState], answer: str) -> PeerState | None:
+    answer = answer.strip()
+    if answer.isdigit() and 1 <= int(answer) <= len(peers):
+        return peers[int(answer) - 1]
+    return None
 
 
 def _ask_row(peers: list[PeerState], prompt: str) -> PeerState | None:
@@ -658,10 +931,15 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
         daemon=True,
     )
     proc.start()
+    screen = LiveScreen()
+    page = 0
+    redraw_now = False
     try:
+        screen.enter()
         while True:
-            deadline = time.monotonic() + REFRESH_SECONDS
-            next_eval = time.monotonic() + EVAL_SECONDS
+            deadline = time.monotonic() + (0.0 if redraw_now else REFRESH_SECONDS)
+            redraw_now = False
+            next_eval = time.monotonic()
             peers: list[PeerState] = []
             while True:
                 try:
@@ -679,53 +957,75 @@ def run_live_session() -> None:  # pragma: no cover - interactif, Windows unique
                     ctrl.expire()
                     peers = monitor.evaluate(now)
                     for p in peers:
-                        ctrl.auto_block_if_needed(p)
+                        try:
+                            ctrl.auto_block_if_needed(p)
+                        except Exception:
+                            logger.exception("bouclier auto : évaluation impossible")
                     if time.monotonic() >= deadline:
                         break
+                if msvcrt.kbhit():
+                    break  # réaction immédiate à une touche
             monitor.prune(now)
             rec = (
                 t("live.rec_on", path=recorder.path)
                 if recorder.active
                 else t("live.off")
             )
-            os.system("cls")
-            print(render(monitor, ctrl, peers, rec, now, player_counter))
+            cols, lines_ = shutil.get_terminal_size((120, 30))
+            frame_size = (cols, lines_)
+            try:
+                page = clamp_page(page, len(peers), lines_, ctrl, player_counter)
+                screen.draw(
+                    render(
+                        monitor,
+                        ctrl,
+                        peers,
+                        rec,
+                        now,
+                        player_counter,
+                        size=frame_size,
+                        page=page,
+                    )
+                )
+            except Exception:
+                # Ne jamais laisser l'écran noir : on journalise et on continue.
+                logger.exception("live : rendu impossible")
+                screen.draw(fit_line(t("live.render_error"), cols))
 
             if not msvcrt.kbhit():
                 continue
-            key = msvcrt.getwch().lower()
+            key = read_key(msvcrt.getwch, msvcrt.kbhit)
             if key == "q":
                 break
-            if key == "b":
-                peer = _ask_row(peers, t("live.ask_block"))
-                if peer:
-                    pseudo = input(t("live.ask_pseudo"))
-                    ctrl.block(peer.ip, pseudo)
-            elif key == "p":
-                peer = _ask_row(peers, t("live.ask_row"))
-                if peer:
-                    ctrl.pseudos[peer.ip] = input(
-                        t("live.ask_pseudo_for", ip=peer.ip)
-                    ).strip()
-            elif key == "d":
-                ips = list(blocked.keys())
-                for i, ip in enumerate(ips, 1):
-                    print(f"{i:>2}  {ip}  {ctrl.block_status(ip)}")
-                answer = input(t("live.ask_unblock")).strip()
-                if answer.isdigit() and 1 <= int(answer) <= len(ips):
-                    ctrl.unblock(ips[int(answer) - 1])
-            elif key == "a":
-                ctrl.toggle_auto_block()
-            elif key == "t":
-                ctrl.toggle_total_block()
-            elif key == "e":
-                if recorder.active:
-                    recorder.stop()
-                else:
-                    recorder.start()
+            redraw_now = True
+            nav = page_step(key)
+            if nav:
+                page += nav
+                continue
+
+            prompt_frame = render(
+                monitor,
+                ctrl,
+                peers,
+                rec,
+                now,
+                player_counter,
+                size=(cols, max(3, lines_ - 2)),
+                page=page,
+            )
+            prompt = make_prompt(screen, prompt_frame, cols)
+
+            try:
+                handle_key(key, ctrl, peers, blocked, recorder, prompt, config)
+            except (EOFError, KeyboardInterrupt):
+                raise
+            except Exception:
+                logger.exception("live : action %r impossible", key)
+                ctrl.events.append(t("live.action_error", action=key.upper()))
     except KeyboardInterrupt:
         pass
     finally:
+        screen.leave()
         recorder.stop()
         writer.close()
         saver.close()

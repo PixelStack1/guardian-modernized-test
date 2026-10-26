@@ -317,9 +317,29 @@ STRINGS: dict[str, dict[str, str]] = {
     "live.no_peers": {"fr": "(aucun pair connecté)", "en": "(no connected peer)"},
     "live.keys": {
         "fr": "[B] Bloquer  [P] Pseudo  [D] Débloquer  [A] Bouclier auto  "
-        "[T] Blocage total  [E] Enregistrement  [Q] Retour",
+        "[T] Blocage total  [E] Enregistrement  [PgUp/PgDn ou +/-] Page  [Q] Retour",
         "en": "[B] Block  [P] Nickname  [D] Unblock  [A] Auto shield  "
-        "[T] Total block  [E] Recording  [Q] Back",
+        "[T] Total block  [E] Recording  [PgUp/PgDn or +/-] Page  [Q] Back",
+    },
+    "live.ev.auto_toggled": {
+        "fr": "Bouclier auto : {state}",
+        "en": "Auto shield: {state}",
+    },
+    "live.ev.total_toggled": {
+        "fr": "Blocage total : {state}",
+        "en": "Total block: {state}",
+    },
+    "live.render_error": {
+        "fr": "Erreur d'affichage (voir le journal) — [Q] pour quitter",
+        "en": "Display error (see log) — [Q] to quit",
+    },
+    "live.action_error": {
+        "fr": "Action [{action}] impossible (voir le journal)",
+        "en": "Action [{action}] failed (see log)",
+    },
+    "live.page": {
+        "fr": "Joueurs {first}–{last} sur {total} (page {page}/{pages})",
+        "en": "Players {first}–{last} of {total} (page {page}/{pages})",
     },
     "live.total_status": {
         "fr": "Blocage total (coupe aussi l'envoi vers l'IP bloquée, {minutes} min) : {state}  [T]",
