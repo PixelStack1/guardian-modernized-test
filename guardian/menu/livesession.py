@@ -208,7 +208,9 @@ class PlayerCounter:
         last = self.last_seen
         if ip in last:
             del last[ip]  # remis en fin : le plus ancien reste en tête
-        elif len(last) >= self.max_players:
+        elif len(last) < self.max_players:
+            self.full = False  # repassé sous la borne : réarmé
+        else:
             del last[next(iter(last))]
             if not self.full:
                 self.full = True
@@ -244,7 +246,10 @@ class PlayerCounter:
             blocked = dict(ctrl.blocked)
         except Exception:
             blocked = {}
-        total_on = bool(ctrl.total_block)
+        try:
+            total_on = bool(ctrl.total_block)
+        except Exception:
+            total_on = False
         cuts: dict[str, float] = {}
         if total_on:
             try:

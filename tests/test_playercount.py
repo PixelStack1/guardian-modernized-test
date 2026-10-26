@@ -311,4 +311,34 @@ def test_seen_is_constant_time_operations():
     c.last_seen = Tracking()
     for i in range(100):
         c.seen(f"198.51.100.{i}")
-    assert Tracking.iters <= 100  # au plus un next(iter()) par éviction
+    assert Tracking.iters <= 96  # exactement un next(iter()) par éviction (100 - 4)
+
+
+def test_total_block_read_error_defaults_to_off():
+    class Ctrl:
+        blocked = {}
+        total_blocked = {A: 5000.0}
+        clock = staticmethod(lambda: 1000.0)
+
+        @property
+        def total_block(self):
+            raise EOFError("manager down")
+
+    c = ls.PlayerCounter(clock=Mono())
+    c.seen(A)
+    assert c.counts(Ctrl()) == (1, 1, 0, 0)
+
+
+def test_full_flag_rearmed_in_seen_below_cap(caplog):
+    c = ls.PlayerCounter(max_players=3, clock=Mono())
+    with caplog.at_level(logging.DEBUG, logger=ls.logger.name):
+        for i in range(5):
+            c.seen(f"198.51.100.{i}")
+        assert c.full
+        del c.last_seen[next(iter(c.last_seen))]  # repasse sous la borne
+        c.seen("192.0.2.1")  # nouvelle IP sous la borne : réarmé
+        assert not c.full
+        c.seen("192.0.2.2")  # sature de nouveau : nouvelle ligne
+    recs = [r for r in caplog.records if "satur" in r.getMessage()]
+    assert len(recs) == 2 and c.full
+    assert "198.51.100" not in caplog.text and "192.0.2" not in caplog.text
