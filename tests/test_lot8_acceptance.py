@@ -329,3 +329,17 @@ def test_parent_watchdog_exits_even_if_cleanup_hangs():
     )
     assert exited.wait(3)
     block.set()
+
+
+def test_managers_are_watched_and_die_with_gui(monkeypatch):
+    from util import parentwatch
+
+    calls = []
+    monkeypatch.setattr(parentwatch, "watch_worker_parent", lambda: calls.append(1))
+    parentwatch.arm_in_child()
+    assert calls == [1]
+    for rel in ("menu/livesession.py", "network/sessions.py"):
+        src = (ROOT / "guardian" / rel).read_text("utf-8")
+        assert "Manager()" not in src.replace("watched_manager()", "")
+    src = (ROOT / "guardian" / "util" / "parentwatch.py").read_text("utf-8")
+    assert "manager.start(initializer=arm_in_child)" in src

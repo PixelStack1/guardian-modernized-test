@@ -6,7 +6,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
-from multiprocessing import Manager, Process
+from multiprocessing import Process
 from multiprocessing.managers import DictProxy, ListProxy
 from typing import TYPE_CHECKING
 
@@ -606,9 +606,9 @@ class IPCollector:
         self.extra_ports = extra_ports_enabled()
         self.priority = priority
         self.process = Process(target=self.run, daemon=True)
-        self.ips: ListProxy[str] = Manager().list()
+        self.ips: ListProxy[str] = parentwatch.watched_manager().list()
         self.seen_ips: DictProxy[str, int] = (
-            Manager().dict()
+            parentwatch.watched_manager().dict()
         )  # key is IP address, value is packets seen
         self.min_packets = packet_count_min_threshold  # minimum amount of packets required to be seen to be added
 

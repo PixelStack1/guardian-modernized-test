@@ -168,3 +168,22 @@ def watch_spawn_parent(
     start(alive, on_parent_exit or _no_cleanup, cleanup_timeout=WORKER_CLEANUP_S)
     _worker_watch_started = True
     return True
+
+
+def arm_in_child() -> None:
+    """Initialiseur des serveurs Manager : quitter si le lanceur (GUI) disparaît.
+    (En onefile, le hook PyInstaller lance les enfants avant le script principal :
+    le serveur Manager n'ouvre pas WinDivert, il faut donc l'armer ici.)"""
+    try:
+        watch_worker_parent()
+    except Exception:
+        logging.getLogger("debugger").exception("manager parent watchdog failed")
+
+
+def watched_manager() -> Any:
+    """Comme ``multiprocessing.Manager()``, mais le serveur meurt avec la GUI."""
+    from multiprocessing.managers import SyncManager
+
+    manager = SyncManager()
+    manager.start(initializer=arm_in_child)
+    return manager
