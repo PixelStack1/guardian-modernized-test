@@ -16,10 +16,15 @@ def run_gui(
     from menu import livesession as ls
 
     app = QApplication.instance() or QApplication(sys.argv)
+    # Lot 7 : arrêt propre aussi à la fin de session Windows (aboutToQuit).
+    app.aboutToQuit.connect(ls.stop_background)
     session = ls.attach_or_start(factory or ls._create_session)
+    win = None
     try:
-        win = MainWindow(session, version)
+        win = MainWindow(session, version, global_hotkeys=True)
         win.show()
         return int(app.exec())
     finally:
+        if win is not None:
+            win.stop_hotkeys()
         ls.stop_background()

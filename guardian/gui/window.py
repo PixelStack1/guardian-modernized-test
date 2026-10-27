@@ -6,6 +6,7 @@ barre latérale 220 px, contenu 14/16/10 px, écart 12 px, cartes rayon 12 px.
 
 from __future__ import annotations
 
+import contextlib
 import html
 import time
 from collections import deque
@@ -13,8 +14,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QKeySequence, QResizeEvent, QShortcut
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QCloseEvent,
+    QGuiApplication,
+    QKeySequence,
+    QResizeEvent,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -28,6 +35,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSlider,
     QStackedWidget,
@@ -48,6 +56,7 @@ from gui.core import (
     reports_directory,
     take_snapshot,
 )
+from gui.profiles import PROFILES, apply_profile, current_profile
 from gui.widgets import (
     HEAD_H,
     ROW_H,
@@ -66,6 +75,9 @@ from gui.widgets import (
     shield_pixmap,
 )
 from network.filters import TRUSTED_DEFAULT
+from util import exehash, health
+from util.hotkeys import DEFAULT_HOTKEYS, GlobalHotkeys, HotkeyApi, hotkey_text
+from util.i18n import t
 
 __all__ = ["COLUMNS", "MainWindow", "flag_icon"]
 
@@ -710,8 +722,8 @@ class FriendsPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(12)
-        lay.addLayout(page_header("Amis", "Toujours autorisés, même en mode panique"))
-        p, pl, _head, self.meta = panel("Liste des amis", "")
+        lay.addLayout(page_header(t("gui.friends.title"), t("gui.friends.hint")))
+        p, pl, _head, self.meta = panel(t("gui.friends.list"), "")
         self.list = QListWidget()
         self.list.setObjectName("friendsList")
         pl.addWidget(self.list, 1)
@@ -719,12 +731,14 @@ class FriendsPage(QWidget):
         form.setContentsMargins(14, 8, 14, 10)
         form.setSpacing(8)
         self.ip = QLineEdit()
-        self.ip.setPlaceholderText("Adresse IP")
+        self.ip.setPlaceholderText(t("gui.friends.ip"))
+        self.ip.returnPressed.connect(self._add)
         self.nick = QLineEdit()
-        self.nick.setPlaceholderText("Pseudo")
-        self.add = QPushButton("Ajouter")
+        self.nick.setPlaceholderText(t("gui.friends.nick"))
+        self.nick.returnPressed.connect(self._add)
+        self.add = QPushButton(t("gui.friends.add"))
         self.add.setObjectName("ok")
-        self.remove = QPushButton("Retirer la sélection")
+        self.remove = QPushButton(t("gui.friends.remove"))
         self.remove.setObjectName("danger")
         self.add.clicked.connect(lambda _c=False: self._add())
         self.remove.clicked.connect(lambda _c=False: self._remove())
@@ -737,7 +751,7 @@ class FriendsPage(QWidget):
 
     def _add(self) -> None:
         ok = self.win.actions_.add_friend_ip(self.ip.text(), self.nick.text())
-        self.message.setText("Ami ajouté." if ok else "Adresse invalide ou refusée.")
+        self.message.setText(t("gui.friends.added" if ok else "gui.friends.refused"))
         if ok:
             self.ip.clear()
             self.nick.clear()
@@ -747,12 +761,12 @@ class FriendsPage(QWidget):
         item = self.list.currentItem()
         if item is not None:
             ip = item.data(Qt.ItemDataRole.UserRole)
-            if isinstance(ip, str):
-                self.win.actions_.remove_friend_ip(ip)
+            if isinstance(ip, str) and self.win.actions_.remove_friend_ip(ip):
+                self.message.setText(t("gui.friends.removed"))
         self.win.refresh()
 
     def update_from(self, snap: Snapshot) -> None:
-        self.meta.setText(f"{len(snap.friends)} ami(s)")
+        self.meta.setText(t("gui.friends.count", n=len(snap.friends)))
         texts = [f"{nick}  —  {ip}" for ip, nick in snap.friends]
         if [self.list.item(i).text() for i in range(self.list.count())] == texts:
             return
@@ -1000,9 +1014,111 @@ class SettingsPage(QWidget):
         lay.addWidget(seg)
         lay.addStretch(1)
         grid.addWidget(f, 2, 2)
-        root.addLayout(grid)
-        root.addStretch(1)
+        inner = QWidget()
+        inner.setObjectName("settingsInner")
+        il = QVBoxLayout(inner)
+        il.setContentsMargins(0, 0, 0, 0)
+        il.setSpacing(10)
+        il.addLayout(grid)
+        il.addLayout(self._extras())
+        il.addStretch(1)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("settingsScroll")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setStyleSheet(
+            "QScrollArea#settingsScroll, QWidget#settingsInner {background: transparent;}"
+        )
+        self.scroll_area.setWidget(inner)
+        root.addWidget(self.scroll_area, 1)
         self.load(win.actions_.settings())
+
+    def _extras(self) -> QGridLayout:
+        """Lot 7 : profils, diagnostic, raccourcis globaux, empreinte de l'exe."""
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        for c in range(3):
+            grid.setColumnStretch(c, 1)
+        f, lay = set_card("⚡", t("gui.profiles.title"), t("gui.profiles.hint"))
+        seg, buttons = segmented(
+            [p.name() for p in PROFILES.values()],
+            lambda k: self.win.apply_profile(list(PROFILES)[k]),
+        )
+        self.profile_buttons = dict(zip(PROFILES, buttons, strict=True))
+        for key, b in self.profile_buttons.items():
+            b.setToolTip(PROFILES[key].description())
+        lay.addWidget(seg)
+        lay.addSpacing(6)
+        self.profile_desc = label("", "setDesc", wrap=True)
+        lay.addWidget(self.profile_desc)
+        lay.addStretch(1)
+        grid.addWidget(f, 0, 0)
+        f, lay = set_card("🩺", t("gui.health.title"), t("gui.health.hint"))
+        self.health_rows: list[QLabel] = []
+        for _ in range(3):
+            row = label("", "setDesc", wrap=True)
+            row.setTextFormat(Qt.TextFormat.RichText)
+            lay.addWidget(row)
+            self.health_rows.append(row)
+        lay.addStretch(1)
+        grid.addWidget(f, 0, 1)
+        f, lay = set_card("⌨", t("gui.hotkeys.title"), t("gui.hotkeys.hint"))
+        self.hotkeys_text = label("", "setDesc", wrap=True)
+        self.hotkeys_text.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(self.hotkeys_text)
+        lay.addSpacing(8)
+        lay.addWidget(label(t("gui.exe.title"), "fieldLabel"))
+        lay.addWidget(label(t("gui.exe.hint"), "setDesc", wrap=True))
+        self.exe_hash = QLineEdit()
+        self.exe_hash.setObjectName("exeHash")
+        self.exe_hash.setReadOnly(True)
+        self.exe_copy = QPushButton(t("gui.exe.copy"))
+        self.exe_copy.clicked.connect(lambda _c=False: self._copy_hash())
+        hl = QHBoxLayout()
+        hl.addWidget(self.exe_hash, 1)
+        hl.addWidget(self.exe_copy)
+        lay.addLayout(hl)
+        lay.addStretch(1)
+        grid.addWidget(f, 0, 2)
+        return grid
+
+    def show_health(self, checks: tuple[health.Check, ...]) -> None:
+        for row, c in zip(self.health_rows, checks, strict=False):
+            color = "#9aa4b2" if c.ok is None else ("#3ddc97" if c.ok else "#ff5c6c")
+            detail = f"<br/><small>{html.escape(c.detail)}</small>" if c.detail else ""
+            row.setText(
+                f"<b style='color:{color}'>{html.escape(c.state())}</b> · "
+                f"{html.escape(c.label())}{detail}"
+            )
+
+    def show_hotkeys(self, failed: list[str], error: str) -> None:
+        lines = []
+        for h in DEFAULT_HOTKEYS:
+            bad = h.action in failed
+            extra = (
+                f" — {html.escape(t('gui.hotkeys.taken'))}" if bad and not error else ""
+            )
+            style_ = " style='color:#ff5c6c'" if bad else ""
+            lines.append(
+                f"<span{style_}><b>{h.text}</b> : {html.escape(t(h.label_key))}{extra}</span>"
+            )
+        if error:
+            lines.append(html.escape(t("gui.hotkeys.off", err=error)))
+        self.hotkeys_text.setText("<br/>".join(lines))
+
+    def show_exe(self, info: exehash.ExeHash) -> None:
+        if info.sha256:
+            self.exe_hash.setText(info.sha256)
+            self.exe_hash.setToolTip(info.path)
+        elif info.error:
+            self.exe_hash.setText(t("gui.exe.error", e=info.error))
+        else:
+            self.exe_hash.setText(t("gui.exe.source"))
+        self.exe_copy.setEnabled(bool(info.sha256))
+
+    def _copy_hash(self) -> None:
+        with contextlib.suppress(Exception):
+            QGuiApplication.clipboard().setText(self.exe_hash.text())
 
     def load(self, s: Settings) -> None:
         self._loading = True
@@ -1098,6 +1214,10 @@ class SettingsPage(QWidget):
         self.shield_help.setText(t("gui.shield_help"))
         self.lang_fr.setChecked(lang == "fr")
         self.lang_en.setChecked(lang == "en")
+        cur = current_profile(self.win.session.ctrl)
+        for key, b in self.profile_buttons.items():
+            b.setChecked(key == cur)
+        self.profile_desc.setText(PROFILES[cur].description() if cur else "")
 
 
 class NavButton(QPushButton):
@@ -1160,9 +1280,16 @@ class MainWindow(QMainWindow):
         session: Any,
         version: str = "",
         ask_text: Callable[[QWidget, str, str], str | None] | None = None,
+        global_hotkeys: bool = False,
+        hotkey_api: Callable[[], HotkeyApi] | None = None,
+        checks: tuple[health.Check, ...] | None = None,
+        exe: exehash.ExeHash | None = None,
     ) -> None:
         super().__init__()
         self.session = session
+        self._bridge = _HotkeyBridge()
+        self._bridge.fired.connect(self.on_hotkey)
+        self.hotkeys: GlobalHotkeys | None = None
         self.actions_ = GuiActions(session)
         self.ask_text = ask_text or _ask_text
         self.setWindowTitle(
@@ -1198,11 +1325,65 @@ class MainWindow(QMainWindow):
         self.show_page(0)
         self._status_since: tuple[str, bool] | None = None
         self._shortcuts()
+        # Lot 7 : diagnostic, empreinte de l'exe, raccourcis globaux.
+        self.checks = checks if checks is not None else health.run_checks()
+        self.settings.show_health(self.checks)
+        self.settings.show_exe(exe if exe is not None else exehash.current())
+        failed: list[str] = []
+        error = ""
+        if global_hotkeys or hotkey_api is not None:
+            self.hotkeys = GlobalHotkeys(
+                self._bridge.fired.emit, api_factory=hotkey_api
+            )
+            failed = self.hotkeys.start()
+            error = self.hotkeys.error
+        else:
+            error = t("health.not_windows")
+        self.settings.show_hotkeys(failed, error)
         self.timer = QTimer(self)
         self.timer.setInterval(REFRESH_MS)
         self.timer.timeout.connect(self.refresh)
         self.timer.start()
         self.refresh()
+        bad = health.problems(self.checks)
+        if bad:
+            self.show_status(t("gui.health.problem", n=bad), False)
+
+    # -- lot 7 ---------------------------------------------------------------
+    def on_hotkey(self, action: str) -> None:
+        """Raccourci global (reçu dans le fil Qt via le signal)."""
+        a = self.actions_
+        fns: dict[str, Callable[[], Any]] = {
+            "emergency": self.toggle_emergency,
+            "panic": a.toggle_panic,
+            "auto": a.toggle_auto,
+            "total": a.toggle_total,
+            "lock": a.toggle_lock,
+        }
+        fn = fns.get(action)
+        if fn is not None:
+            self._run(fn)
+
+    def toggle_emergency(self) -> None:
+        with self.session.lock:
+            try:
+                self.session.ctrl.toggle_emergency()
+            except Exception:
+                return
+        self.refresh()
+
+    def apply_profile(self, key: str) -> None:
+        apply_profile(self.session, key)
+        self.refresh()
+
+    def stop_hotkeys(self) -> None:
+        if self.hotkeys is not None:
+            self.hotkeys.stop()
+            self.hotkeys = None
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self.stop_hotkeys()
+        super().closeEvent(event)
 
     def _sidebar(self) -> QFrame:
         side = QFrame()
@@ -1270,6 +1451,11 @@ class MainWindow(QMainWindow):
         )
         self.panic.setToolTip("Raccourci clavier : X")
         bl.addWidget(self.panic)
+        self.emergency = SwitchRow(
+            t("gui.emergency"), t("gui.emergency.desc"), self.toggle_emergency
+        )
+        self.emergency.setToolTip(hotkey_text("emergency"))
+        bl.addWidget(self.emergency)
         fl.addWidget(box)
         lang = QFrame()
         lang.setObjectName("langSwitch")
@@ -1377,7 +1563,11 @@ class MainWindow(QMainWindow):
             if self.stack.currentWidget() is files:
                 files.update_from(snap)
         self.panic.set_state(snap.panic)
-        if snap.toggle is not None and snap.toggle != self._status_since:
+        self.emergency.set_state(snap.paused)
+        if snap.paused:
+            self._status_since = None
+            self.show_status(t("gui.emergency.on", hk=hotkey_text("emergency")), False)
+        elif snap.toggle is not None and snap.toggle != self._status_since:
             self._status_since = snap.toggle
             self.show_status(*snap.toggle)
         elif snap.toggle is None and self._status_since is not None:
@@ -1449,3 +1639,9 @@ class MainWindow(QMainWindow):
 def _ask_text(parent: QWidget, title: str, text: str) -> str | None:
     value, ok = QInputDialog.getText(parent, title, text)
     return value if ok else None
+
+
+class _HotkeyBridge(QObject):
+    """Signal : le fil des raccourcis globaux -> le fil Qt (connexion en file)."""
+
+    fired = Signal(str)

@@ -210,29 +210,40 @@ def handle_packet(
     total_on: bool = True,
     relay_block: bool = False,
     policy: LivePolicy | None = None,
+    bypass: bool = False,
 ) -> bool:
     """Réinjecte le paquet ORIGINAL tel quel (``w.send(packet)``) ou le jette.
     Renvoie True si envoyé. Jamais de paquet fabriqué ni modifié. ``policy`` :
-    verrou de session / récidivistes (lot 2), None = comportement du lot 1."""
+    verrou de session / récidivistes (lot 2), None = comportement du lot 1.
+
+    Lot 7 : ``bypass`` (arrêt d'urgence) = aucun filtrage, tout passe ; une IP de la
+    liste d'amis (``policy.friends``) n'est JAMAIS jetée, même bloquée."""
     try:
         inbound = bool(packet.is_inbound)
-        outbound = bool(packet.is_outbound)
-        relay_traffic = relay_block and relay_packet(packet)
-        drop = (inbound or outbound) and should_drop(
-            inbound,
-            packet.ip.src_addr,
-            packet.ip.dst_addr,
-            blocked,
-            total,
-            now,
-            total_on,
-            relay_block,
-            relay_traffic,
-        )
-        if not drop and policy is not None:
-            drop = policy.drop(inbound, packet.ip.src_addr)
+        peer = packet.ip.src_addr if inbound else packet.ip.dst_addr
+        exempt = bypass or (policy is not None and peer in policy.friends)
     except Exception:
-        drop = False
+        inbound, exempt = False, True  # fail-safe : le paquet passe
+    drop = False
+    if not exempt:
+        try:
+            outbound = bool(packet.is_outbound)
+            relay_traffic = relay_block and relay_packet(packet)
+            drop = (inbound or outbound) and should_drop(
+                inbound,
+                packet.ip.src_addr,
+                packet.ip.dst_addr,
+                blocked,
+                total,
+                now,
+                total_on,
+                relay_block,
+                relay_traffic,
+            )
+            if not drop and policy is not None:
+                drop = policy.drop(inbound, packet.ip.src_addr)
+        except Exception:
+            drop = False
     if drop:
         return False
     w.send(packet)
@@ -274,6 +285,7 @@ def capture_loop(
     panic_flag: Any = None,
     friends: MutableMapping[str, str] | None = None,
     overflow_flag: Any = None,
+    bypass_flag: Any = None,
 ) -> None:  # pragma: no cover - nécessite Windows + WinDivert
     from network.blackbox import drop_reason, meta_from_packet
     from network.sessions import open_windivert, packet_filter
@@ -288,6 +300,7 @@ def capture_loop(
         local_total: dict[str, float] = {}
         total_on = False
         relay_on = False
+        bypass_on = False
         next_refresh = 0.0
         # IP déjà vues dans CETTE session (processus de capture = durée de la session).
         policy = LivePolicy()
@@ -300,6 +313,7 @@ def capture_loop(
                 local_total = dict(total_blocked) if total_blocked is not None else {}
                 total_on = read_flag(total_flag)
                 relay_on = read_flag(relay_flag)
+                bypass_on = read_flag(bypass_flag)
                 policy.lock_on = read_flag(lock_flag)
                 policy.offender_drop = read_flag(offender_flag)
                 policy.panic = read_flag(panic_flag)
@@ -313,7 +327,15 @@ def capture_loop(
                     )
                 next_refresh = now + BLOCKLIST_REFRESH
             sent = handle_packet(
-                w, packet, local, local_total, now, total_on, relay_on, policy
+                w,
+                packet,
+                local,
+                local_total,
+                now,
+                total_on,
+                relay_on,
+                policy,
+                bypass_on,
             )
             if policy.seen_overflow and overflow_flag is not None:
                 with contextlib.suppress(Exception):
@@ -563,8 +585,12 @@ class LiveSessionController:
         panic_flag: Any = None,
         overflow_flag: Any = None,
         filters: Any = None,
+        bypass_flag: Any = None,
     ) -> None:
         self.blocked = blocked
+        # Lot 7 : arrêt d'urgence (drapeau partagé : la capture laisse tout passer).
+        self.bypass_flag = bypass_flag
+        self._paused = False
         # Lot 3 : débordement des IP vues (drapeau partagé) et filtres d'information.
         self.overflow_flag = overflow_flag
         self.seen_overflow_local = False
@@ -621,7 +647,8 @@ class LiveSessionController:
         self.toggle_msg: tuple[str, float] | None = None
         # Les IP déjà en Blacklist restent bloquées dans cette vue aussi.
         for ip, _name in list(blacklist):
-            self.blocked[ip] = PERMANENT
+            if not self.is_friend(ip):  # lot 7 : un ami n'est jamais bloqué
+                self.blocked[ip] = PERMANENT
         # Blocages auto persistants (auto_block.json) : ip -> expiration.
         # ``auto_store`` expose request(dict) (AutoBlockSaver) ; None = mémoire seule.
         self.auto_store = auto_store
@@ -630,7 +657,11 @@ class LiveSessionController:
             auto_block_available
         ):  # sans plages R*/Azure, impossible de filtrer : ignorés
             for ip, expiry in (auto_entries or {}).items():
-                if ip in self.blocked or self.auto_block_guard(ip):
+                if (
+                    ip in self.blocked
+                    or self.auto_block_guard(ip)
+                    or self.is_friend(ip)
+                ):
                     continue
                 self.auto_entries[ip] = expiry
                 self.blocked[ip] = expiry
@@ -704,6 +735,51 @@ class LiveSessionController:
 
     def toggle_panic(self) -> None:
         self.panic = not self.panic
+
+    @property
+    def filtering_paused(self) -> bool:
+        return self._paused
+
+    def emergency_stop(self) -> None:
+        """Arrêt d'urgence (lot 7) : la capture laisse TOUT passer (w.send du paquet
+        original), tous les blocages en mémoire sont levés et chaque mode de rejet
+        est désactivé. Les fichiers (data.json, auto_block.json) ne sont PAS modifiés :
+        ``resume_filtering`` rétablit les blocages persistants."""
+        self._paused = True
+        self._write_flag(self.bypass_flag, True)
+        self.panic = False
+        self.session_lock = False
+        self.offender_drop = False
+        self.auto_block = False
+        self.total_block = False
+        with contextlib.suppress(Exception):
+            self.total_blocked.clear()
+        n = 0
+        with contextlib.suppress(Exception):
+            n = len(self.blocked)
+            self.blocked.clear()
+        self.events.append(t("live.ev.emergency_on", n=n))
+
+    def resume_filtering(self) -> None:
+        """Fin de l'arrêt d'urgence : blocages persistants rétablis (jamais un ami)."""
+        with contextlib.suppress(Exception):
+            for ip, _name in list(self.blacklist):
+                if not self.is_friend(ip):
+                    self.blocked[ip] = PERMANENT
+        with contextlib.suppress(Exception):
+            now = self.clock()
+            for ip, expiry in list(self.auto_entries.items()):
+                if now < expiry and not self.is_friend(ip):
+                    self.blocked[ip] = expiry
+        self._paused = False
+        self._write_flag(self.bypass_flag, False)
+        self.events.append(t("live.ev.emergency_off"))
+
+    def toggle_emergency(self) -> None:
+        if self._paused:
+            self.resume_filtering()
+        else:
+            self.emergency_stop()
 
     def is_friend(self, ip: str) -> bool:
         try:
@@ -870,6 +946,9 @@ class LiveSessionController:
         if is_rockstar_server(ip):
             self.events.append(t("live.ev.rockstar_refused", ip=ip))
             return
+        if self.is_friend(ip):
+            self.events.append(t("live.ev.friend_refused", ip=ip))
+            return
         pseudo = pseudo or self.pseudos.get(ip, "")
         self.blocked[ip] = PERMANENT
         if self.auto_entries.pop(ip, None) is not None:  # devient permanent (data.json)
@@ -894,6 +973,7 @@ class LiveSessionController:
     def auto_block_if_needed(self, peer: PeerState) -> bool:
         if (
             not self.auto_block
+            or self._paused
             or not self.auto_block_available
             or peer.level < Level.SUSPECT
             or is_rockstar_server(peer.ip)
@@ -1813,6 +1893,7 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
     offender_ips: MutableMapping[str, float] = manager.dict()
     panic_flag = Value("b", 0)
     overflow_flag = Value("b", 0)
+    bypass_flag = Value("b", 0)
     friends: MutableMapping[str, str] = manager.dict()
     friends.update(load_friends(config.data.get(FRIENDS_KEY)))
     packets: Queue[Packet] = Queue(QUEUE_MAX)
@@ -1863,6 +1944,7 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
         friends=friends,
         panic_flag=panic_flag,
         overflow_flag=overflow_flag,
+        bypass_flag=bypass_flag,
         filters=make_filters(config.data),
         # Lecture une seule fois, avant le démarrage de la capture.
         auto_entries=autoblock.load(time.time(), guard, max_seconds=AUTO_BLOCK_SECONDS)
@@ -1886,6 +1968,7 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
             panic_flag,
             friends,
             overflow_flag,
+            bypass_flag,
         ),
         daemon=True,
     )

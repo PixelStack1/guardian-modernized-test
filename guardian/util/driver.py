@@ -12,6 +12,13 @@ Policy (documented choice):
 - Cleanup is idempotent and runs on normal exit, Ctrl+C (KeyboardInterrupt -> finally) and best-effort
   via atexit on unhandled exceptions. It cannot run if the process is killed hard (TerminateProcess).
 
+Lot 7 (arrêt propre) : avant de fermer le pilote, les fonctions ``add_pre_cleanup``
+(arrêt de la session en fond = fermeture de NOTRE handle WinDivert) sont appelées dans
+l'ordre inverse d'enregistrement ; puis les processus enfants ; puis le service. Sous
+Windows, ``install_console_handler`` couvre aussi la fermeture de la console, la
+déconnexion et l'arrêt de la machine (SetConsoleCtrlHandler). Toute erreur est
+journalisée et n'empêche jamais les étapes suivantes.
+
 Only the network driver service is touched; nothing interacts with the game process.
 """
 
@@ -20,9 +27,20 @@ from __future__ import annotations
 import atexit
 import logging
 import multiprocessing
+import sys
+import threading
+from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Événements de SetConsoleCtrlHandler.
+CTRL_C_EVENT = 0
+CTRL_BREAK_EVENT = 1
+CTRL_CLOSE_EVENT = 2
+CTRL_LOGOFF_EVENT = 5
+CTRL_SHUTDOWN_EVENT = 6
+SHUTDOWN_EVENTS = (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT)
 
 
 class DriverLifecycle:
@@ -31,6 +49,14 @@ class DriverLifecycle:
         self.was_registered_before: bool | None = None
         self.loaded_by_guardian = False
         self._cleaned = False
+        self._lock = threading.Lock()
+        self._pre: list[Callable[[], Any]] = []
+        self._handler: Any = None
+        self.steps: list[str] = []  # journal de l'arrêt (tests, history.log)
+
+    def add_pre_cleanup(self, fn: Callable[[], Any]) -> None:
+        """À appeler avant la fermeture du pilote (ex. arrêt de la session en fond)."""
+        self._pre.append(fn)
 
     def start(self) -> None:
         self.was_registered_before = bool(self._wd.is_registered())
@@ -45,9 +71,17 @@ class DriverLifecycle:
         )
 
     def cleanup(self) -> None:
-        if self._cleaned:
-            return
-        self._cleaned = True
+        with self._lock:
+            if self._cleaned:
+                return
+            self._cleaned = True
+        for fn in reversed(self._pre):
+            try:
+                fn()
+                self.steps.append("pre")
+            except Exception as e:
+                logger.warning("Pre-cleanup %r failed: %s", fn, e)
+        self.steps.append("children")
         # Close our own handles first: filters run in child processes.
         for child in multiprocessing.active_children():
             try:
@@ -60,6 +94,35 @@ class DriverLifecycle:
             return
         try:
             self._wd.unregister()
+            self.steps.append("unregister")
             logger.info("WinDivert driver stopped/unregistered on exit")
         except Exception as e:  # pragma: no cover - best effort
             logger.warning("WinDivert unregister failed: %s", e)
+
+    def console_event(self, event: int) -> bool:
+        """Rappel de SetConsoleCtrlHandler : nettoie sur fermeture/déconnexion/arrêt.
+        Renvoie False (Windows applique ensuite son traitement par défaut)."""
+        if event in SHUTDOWN_EVENTS or event in (CTRL_C_EVENT, CTRL_BREAK_EVENT):
+            try:
+                self.cleanup()
+            except Exception as e:  # pragma: no cover - best effort
+                logger.warning("Console-event cleanup failed: %s", e)
+        return False
+
+    def install_console_handler(self, kernel32: Any = None) -> bool:
+        """Windows : nettoyage aussi à la fermeture de la console et à l'arrêt."""
+        try:
+            if kernel32 is None:
+                if sys.platform != "win32":
+                    return False
+                import ctypes
+
+                kernel32 = ctypes.windll.kernel32
+                proto = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)
+                self._handler = proto(lambda ev: int(self.console_event(int(ev))))
+            else:
+                self._handler = self.console_event
+            return bool(kernel32.SetConsoleCtrlHandler(self._handler, True))
+        except Exception as e:
+            logger.warning("SetConsoleCtrlHandler failed: %s", e)
+            return False
