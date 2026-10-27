@@ -210,7 +210,7 @@ def test_worker_parent_watchdog_only_in_mp_children(monkeypatch):
 
     started, seen = [], []
 
-    def start(*a):
+    def start(*a, **k):
         started.append(a)
 
     def probe(pid):
@@ -245,9 +245,11 @@ def test_spawn_parent_watchdog_from_argv(monkeypatch):
     assert f(["g.exe", "--multiprocessing-fork", "parent_pid=x"]) is None
     monkeypatch.setattr(parentwatch, "_worker_watch_started", False)
     started, seen = [], []
-    assert not parentwatch.watch_spawn_parent(["g.exe"], lambda p: None, started.append)
+    assert not parentwatch.watch_spawn_parent(["g.exe"], lambda p: None)
     assert parentwatch.watch_spawn_parent(
-        argv, lambda p: seen.append(p) or (lambda: True), lambda *a: started.append(a)
+        argv,
+        lambda p: seen.append(p) or (lambda: True),
+        lambda *a, **k: started.append(a),
     )
     assert seen == [2596] and len(started) == 1
     src = (ROOT / "guardian" / "__main__.py").read_text("utf-8")
@@ -309,3 +311,21 @@ def test_spawn_watchdog_wired_with_orphan_cleanup():
     s = (ROOT / "guardian" / "network" / "sessions.py").read_text("utf-8")
     body = s[s.index("def open_windivert") : s.index("def probe_filter")]
     assert "track_handle(handle)" in body and "untrack_handle(handle)" in body
+
+
+def test_parent_watchdog_exits_even_if_cleanup_hangs():
+    import threading
+
+    from util import parentwatch
+
+    exited = threading.Event()
+    block = threading.Event()
+    parentwatch.start_parent_watchdog(
+        lambda: False,
+        lambda: block.wait(30),  # nettoyage bloqué
+        lambda code: exited.set(),
+        interval=0.01,
+        cleanup_timeout=0.2,
+    )
+    assert exited.wait(3)
+    block.set()

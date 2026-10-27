@@ -67,6 +67,7 @@ def start_parent_watchdog(
     on_parent_exit: Callable[[], Any],
     exit_fn: Callable[[int], Any] = os._exit,
     interval: float = 1.0,
+    cleanup_timeout: float = 12.0,
 ) -> threading.Thread:
     """Daemon thread: when ``alive()`` turns False, run ``on_parent_exit`` then exit."""
     stop = threading.Event()
@@ -75,14 +76,23 @@ def start_parent_watchdog(
         while not stop.wait(interval):
             if alive():
                 continue
-            try:
-                on_parent_exit()
-            except Exception:
-                logging.getLogger("debugger").exception(
-                    "parent watchdog: cleanup after parent exit failed"
-                )
-            finally:
-                exit_fn(0)
+
+            # Nettoyage borné dans le temps : un appel bloqué (ex. fermeture d'un
+            # handle pendant une lecture) ne doit jamais empêcher la sortie, qui
+            # ferme de toute façon les handles du processus.
+            def guarded() -> None:
+                try:
+                    on_parent_exit()
+                except Exception:
+                    logging.getLogger("debugger").exception(
+                        "parent watchdog: cleanup after parent exit failed"
+                    )
+
+            worker = threading.Thread(target=guarded, name="parent-exit-cleanup")
+            worker.daemon = True
+            worker.start()
+            worker.join(cleanup_timeout)
+            exit_fn(0)
             return
 
     t = threading.Thread(target=run, name="parent-watchdog", daemon=True)
@@ -91,6 +101,7 @@ def start_parent_watchdog(
 
 
 _worker_watch_started = False
+WORKER_CLEANUP_S = 4.0  # worker orphelin : nettoyage borné puis sortie
 
 
 def _no_cleanup() -> None:
@@ -118,7 +129,7 @@ def watch_worker_parent(
     alive = windows_parent_probe(pid=ppid) if probe is None else probe(ppid)
     if alive is None:
         return False
-    start(alive, on_parent_exit or _no_cleanup)
+    start(alive, on_parent_exit or _no_cleanup, cleanup_timeout=WORKER_CLEANUP_S)
     _worker_watch_started = True
     return True
 
@@ -154,6 +165,6 @@ def watch_spawn_parent(
     alive = windows_parent_probe(pid=pid) if probe is None else probe(pid)
     if alive is None:
         return False
-    start(alive, on_parent_exit or _no_cleanup)
+    start(alive, on_parent_exit or _no_cleanup, cleanup_timeout=WORKER_CLEANUP_S)
     _worker_watch_started = True
     return True

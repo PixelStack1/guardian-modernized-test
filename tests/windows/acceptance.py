@@ -330,8 +330,20 @@ class Run:  # pragma: no cover - Windows
     def gone(self) -> bool:
         return self.p.poll() is not None and not (self.child and pid_alive(self.child))
 
+    def descendants(self) -> list[int]:
+        """Processus de l'exe dont le parent est NOTRE enfant (workers orphelins)."""
+        out = []
+        for pair in same_exe_processes(self.exe).split():
+            pid, _, ppid = pair.partition("<-")
+            if pid.isdigit() and ppid.isdigit() and int(ppid) == self.child:
+                out.append(int(pid))
+        return out
+
     def kill_own(self) -> None:
-        for pid in (self.child, self.parent):
+        own = self.descendants() if self.child else []
+        if own:
+            self.rep.metrics[f"{self.name}.orphans_killed"] = own
+        for pid in (*own, self.child, self.parent):
             if pid and pid_alive(pid):
                 subprocess.run(
                     ["taskkill", "/F", "/PID", str(pid)], capture_output=True
