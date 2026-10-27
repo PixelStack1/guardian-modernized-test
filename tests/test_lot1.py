@@ -14,6 +14,11 @@ from network.newplayer import (
     PlayerJournal,
     format_line,
 )
+from network.relay import (
+    MATCHMAKING_RESPONSE_SIZES,
+    PROTECTED_SIZES,
+    is_relay_traffic,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "session_anonymisee.csv"
 ROCKSTAR = "185.56.65.10"  # plage officielle Take-Two (T2_EU_FALLBACK)
@@ -70,10 +75,14 @@ def test_should_drop_default_never_drops_rockstar():
 
 
 def test_should_drop_relay_block_drops_both_directions_only_rockstar():
-    assert ls.should_drop(True, ROCKSTAR, "192.168.1.2", {}, {}, 0.0, False, True)
-    assert ls.should_drop(False, "192.168.1.2", ROCKSTAR, {}, {}, 0.0, False, True)
-    assert not ls.should_drop(True, PLAYER, "192.168.1.2", {}, {}, 0.0, False, True)
-    assert not ls.should_drop(False, "192.168.1.2", PLAYER, {}, {}, 0.0, False, True)
+    L = "192.168.1.2"
+    assert ls.should_drop(True, ROCKSTAR, L, {}, {}, 0.0, False, True, True)
+    assert ls.should_drop(False, L, ROCKSTAR, {}, {}, 0.0, False, True, True)
+    assert not ls.should_drop(True, PLAYER, L, {}, {}, 0.0, False, True, True)
+    assert not ls.should_drop(False, L, PLAYER, {}, {}, 0.0, False, True, True)
+    # Pas du trafic relais (auth/matchmaking) : jamais jeté, même en « bloquer ».
+    assert not ls.should_drop(True, ROCKSTAR, L, {}, {}, 0.0, False, True, False)
+    assert not ls.should_drop(False, L, ROCKSTAR, {}, {}, 0.0, False, True, False)
 
 
 def test_handle_packet_relay_block_only_drops_or_sends_original(packet_factory):
@@ -276,3 +285,122 @@ def test_replay_cli(capsys, tmp_path):
     from util import i18n
 
     i18n.set_language("fr", persist=False)
+
+
+# -- relais vs authentification / Social Club / matchmaking -------------------
+def make_tcp_packet(src, dst, sport, dport, payload=b"", inbound=True):
+    import struct
+
+    import pydivert
+
+    tcp_hdr = struct.pack("!HHIIBBHHH", sport, dport, 0, 0, 0x50, 0x18, 1024, 0, 0)
+    total = 20 + len(tcp_hdr) + len(payload)
+    ip_hdr = struct.pack(
+        "!BBHHHBBH4s4s",
+        0x45,
+        0,
+        total,
+        0,
+        0,
+        64,
+        6,
+        0,
+        bytes(int(o) for o in src.split(".")),
+        bytes(int(o) for o in dst.split(".")),
+    )
+    d = pydivert.Direction.INBOUND if inbound else pydivert.Direction.OUTBOUND
+    return pydivert.Packet(ip_hdr + tcp_hdr + payload, (1, 0), d)
+
+
+class W:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, p):
+        self.sent.append(p)
+
+
+def test_protected_sizes_cover_sessions_known_sizes():
+    from network import sessions
+
+    assert sessions.KNOWN_SIZES <= PROTECTED_SIZES
+    assert MATCHMAKING_RESPONSE_SIZES <= PROTECTED_SIZES
+
+
+@pytest.mark.parametrize(
+    ("udp", "port", "size", "expected"),
+    [
+        (True, 6672, 400, True),  # jeu relayé
+        (False, 6672, 400, False),  # TCP
+        (False, 443, 400, False),  # HTTPS / Social Club / auth
+        (True, 443, 400, False),
+        (True, 61455, 400, False),  # ports de services
+        (True, 61458, 400, False),
+        (True, 6672, None, False),  # taille inconnue
+        (True, 6672, -1, False),
+        (True, None, 400, False),
+    ],
+)
+def test_is_relay_traffic(udp, port, size, expected):
+    assert is_relay_traffic(udp, port, size) is expected
+
+
+@pytest.mark.parametrize("size", sorted(PROTECTED_SIZES))
+def test_heartbeat_matchmaking_never_relay(size):
+    assert not is_relay_traffic(True, 6672, size)
+
+
+@pytest.mark.parametrize("relay_on", [False, True])
+@pytest.mark.parametrize("total_on", [False, True])
+@pytest.mark.parametrize("inbound", [False, True])
+def test_auth_socialclub_matchmaking_never_dropped(
+    packet_factory, relay_on, total_on, inbound
+):
+    """Dans TOUS les réglages : TCP/HTTPS Rockstar, ports de services UDP et tailles
+    heartbeat/matchmaking sur 6672 sont réinjectés tels quels (paquet original)."""
+    local = "192.168.1.2"
+    src, dst = (ROCKSTAR, local) if inbound else (local, ROCKSTAR)
+    packets = [
+        make_tcp_packet(src, dst, 443, 50000, b"x" * 300, inbound),
+        make_tcp_packet(src, dst, 80, 50001, b"x" * 300, inbound),
+        packet_factory(
+            src=src, dst=dst, payload=b"x" * 300, dport=61455, inbound=inbound
+        ),
+        *(
+            packet_factory(src=src, dst=dst, payload=b"x" * n, inbound=inbound)
+            for n in sorted(PROTECTED_SIZES)
+        ),
+    ]
+    for pkt in packets:
+        w = W()
+        assert ls.handle_packet(w, pkt, {}, {}, 0.0, total_on, relay_on) is True
+        assert w.sent == [pkt] and w.sent[0] is pkt
+
+
+@pytest.mark.parametrize("inbound", [False, True])
+def test_relay_block_drops_only_rockstar_udp_game_traffic(packet_factory, inbound):
+    local = "192.168.1.2"
+    src, dst = (ROCKSTAR, local) if inbound else (local, ROCKSTAR)
+    game = packet_factory(src=src, dst=dst, payload=b"x" * 400, inbound=inbound)
+    w = W()
+    assert ls.handle_packet(w, game, {}, {}, 0.0, False, False) is True  # défaut
+    assert ls.handle_packet(w, game, {}, {}, 0.0, False, True) is False  # bloquer
+    assert w.sent == [game]  # aucun envoi pour le paquet jeté
+
+
+def test_relay_packet_errors_are_failsafe():
+    class Broken:
+        udp = object()
+
+        @property
+        def dst_port(self):
+            raise RuntimeError
+
+    assert ls.relay_packet(Broken()) is False
+
+
+def test_replay_relay_keeps_matchmaking_sizes():
+    rows = [(1.0, ROCKSTAR, n, True) for n in sorted(PROTECTED_SIZES)]
+    rows.append((2.0, ROCKSTAR, 400, True))
+    res = rp.replay(rows, relay_mode="bloquer", emit=lambda _l: None)
+    assert res.dropped_by_ip == {ROCKSTAR: 1}

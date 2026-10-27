@@ -28,7 +28,14 @@ from menu import livesession as ls  # noqa: E402
 from network.anomaly import SessionMonitor  # noqa: E402
 from network.newplayer import NewPlayerTracker, PlayerJournal  # noqa: E402
 from network.recorder import HEADER  # noqa: E402
-from network.relay import RELAY_ALLOW, RELAY_VALUES, is_block, normalize  # noqa: E402
+from network.relay import (  # noqa: E402
+    GAME_PORT,
+    RELAY_ALLOW,
+    RELAY_VALUES,
+    is_block,
+    is_relay_traffic,
+    normalize,
+)
 from util.i18n import LANGUAGES, set_language, t  # noqa: E402
 
 Row = tuple[float, str, int, bool]
@@ -153,6 +160,9 @@ def replay(
             ts,
             ctrl.total_block,
             relay_block,
+            # Le CSV ne contient que du trafic UDP capturé sur le port de jeu (filtre de
+            # la vue en direct) mais pas le port : on suppose 6672 (le pire cas).
+            is_relay_traffic(True, GAME_PORT, size),
         )
         if drop:
             if res.dropped_by_ip[ip] == 0:

@@ -322,10 +322,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "[↑↓/+-]Page [R]eturn [Q]uit",
     },
     "live.relay_status": {
-        "fr": "Relais Rockstar : {state} (touche L ; « bloquer » jette le trafic des "
-        "serveurs Rockstar, risque de perte de session)",
-        "en": 'Rockstar relay: {state} (key L; "block" drops Rockstar server traffic, '
-        "you may lose the session)",
+        "fr": "Relais Rockstar : {state} (touche L ; « bloquer » jette seulement le jeu "
+        "relayé UDP 6672, jamais auth/Social Club/matchmaking)",
+        "en": 'Rockstar relay: {state} (key L; "block" drops only relayed UDP 6672 '
+        "game traffic, never auth/Social Club/matchmaking)",
     },
     "live.relay_allow": {"fr": "autoriser", "en": "allow"},
     "live.relay_block": {"fr": "bloquer", "en": "block"},

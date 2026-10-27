@@ -32,7 +32,14 @@ from colorama import Fore, Style
 from config.configdata import ConfigData
 from config.globallist import Blacklist
 from network.anomaly import LEVEL_KEYS, Level, PeerState, SessionMonitor
-from network.relay import RELAY_DEFAULT, RELAY_KEY, is_block, normalize, toggled
+from network.relay import (
+    RELAY_DEFAULT,
+    RELAY_KEY,
+    is_block,
+    is_relay_traffic,
+    normalize,
+    toggled,
+)
 from util.geoip import country_code
 from util.i18n import t
 
@@ -87,17 +94,24 @@ def should_drop(
     now: float,
     total_on: bool = True,
     relay_block: bool = False,
+    relay_traffic: bool = False,
 ) -> bool:
     """Décision par paquet (aucune modification, aucune création de paquet).
 
-    ``relay_block`` (réglage « relais Rockstar » = bloquer) : tout paquet de/vers une
-    IP des plages Rockstar/Take-Two est jeté. Par défaut False : comportement v3.6.1.
+    ``relay_block`` (réglage « relais Rockstar » = bloquer) : un paquet de/vers une IP
+    Rockstar est jeté SEULEMENT si ``relay_traffic`` (network.relay.is_relay_traffic :
+    UDP, port 6672, hors tailles heartbeat/matchmaking). Authentification, Social Club,
+    matchmaking : jamais jetés. Par défaut False : comportement v3.6.1.
 
     Entrant : rejeté si la source est bloquée. Sortant : rejeté UNIQUEMENT si la
     destination exacte est en coupure sortante (mode blocage total) et toujours
     bloquée en entrant. En cas d'erreur, le paquet passe (fail-safe)."""
     try:
-        if relay_block and is_rockstar_server(src if inbound else dst):
+        if (
+            relay_block
+            and relay_traffic
+            and is_rockstar_server(src if inbound else dst)
+        ):
             return True
         if inbound:
             return is_blocked(blocked, src, now)
@@ -123,6 +137,7 @@ def handle_packet(
     try:
         inbound = bool(packet.is_inbound)
         outbound = bool(packet.is_outbound)
+        relay_traffic = relay_block and relay_packet(packet)
         drop = (inbound or outbound) and should_drop(
             inbound,
             packet.ip.src_addr,
@@ -132,6 +147,7 @@ def handle_packet(
             now,
             total_on,
             relay_block,
+            relay_traffic,
         )
     except Exception:
         drop = False
@@ -139,6 +155,17 @@ def handle_packet(
         return False
     w.send(packet)
     return True
+
+
+def relay_packet(packet: Any) -> bool:
+    """Métadonnées seulement (protocole, port, taille) ; toute erreur = False (passe).
+    Le port de jeu est le port de destination dans les deux sens (filtre WinDivert :
+    entrant vers notre 6672, sortant vers le 6672 du pair)."""
+    try:
+        udp = getattr(packet, "udp", None) is not None
+        return is_relay_traffic(udp, int(packet.dst_port), len(packet.payload))
+    except Exception:
+        return False
 
 
 def read_flag(flag: Any) -> bool:
