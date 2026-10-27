@@ -486,6 +486,18 @@ def scenario_main(
         run.kill_own()
 
 
+def same_exe_processes(exe: Path) -> str:  # pragma: no cover - Windows
+    """PID/PPID des processus portant le nom de l'exe (lecture seule)."""
+    ps = (
+        "Get-CimInstance Win32_Process -Filter \"Name='" + exe.name + "'\" | "
+        'ForEach-Object { "$($_.ProcessId)<-$($_.ParentProcessId)" }'
+    )
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True
+    )
+    return " ".join((r.stdout or "").split()) or "none"
+
+
 def scenario_kill(
     exe: Path, out: Path, rep: Report, win: Win, target: str
 ) -> None:  # pragma: no cover
@@ -496,7 +508,10 @@ def scenario_kill(
         pid = run.child if target == "child" else run.parent
         subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
         ok, ms = wait_until(run.gone, threshold("EXIT_MS"), 0.1)
-        rep.check(f"taskkill /F {target} PID: process tree exited", ok, f"{ms:.0f} ms")
+        detail = f"{ms:.0f} ms"
+        if not ok:  # diagnostic en lecture seule : instances restantes de l'exe
+            detail += "; left: " + same_exe_processes(exe)
+        rep.check(f"taskkill /F {target} PID: process tree exited", ok, detail)
         check_driver_gone(rep, f"taskkill-{target}")
     finally:
         run.kill_own()

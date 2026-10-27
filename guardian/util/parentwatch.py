@@ -33,7 +33,9 @@ def is_onefile_child() -> bool:
     return bool(exe_dir != os.path.normcase(os.path.abspath(meipass)))
 
 
-def windows_parent_probe(kernel32: Any = None) -> Callable[[], bool] | None:
+def windows_parent_probe(
+    kernel32: Any = None, pid: int | None = None
+) -> Callable[[], bool] | None:
     """Return a callable "is the parent still alive?" bound to a handle opened now
     (immune to PID reuse), or None if unavailable."""
     try:
@@ -43,7 +45,9 @@ def windows_parent_probe(kernel32: Any = None) -> Callable[[], bool] | None:
             import ctypes
 
             kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(SYNCHRONIZE, False, os.getppid())
+        handle = kernel32.OpenProcess(
+            SYNCHRONIZE, False, os.getppid() if pid is None else pid
+        )
         if not handle:
             return None
     except Exception:
@@ -90,7 +94,7 @@ _worker_watch_started = False
 
 
 def watch_worker_parent(
-    probe: Callable[[], Callable[[], bool] | None] = windows_parent_probe,
+    probe: Callable[[int], Callable[[], bool] | None] | None = None,
     start: Callable[..., Any] = start_parent_watchdog,
 ) -> bool:
     """Capture workers (multiprocessing children holding a WinDivert handle):
@@ -100,9 +104,13 @@ def watch_worker_parent(
     global _worker_watch_started
     import multiprocessing
 
-    if _worker_watch_started or multiprocessing.parent_process() is None:
+    parent = multiprocessing.parent_process()
+    ppid = getattr(parent, "pid", None)
+    if _worker_watch_started or not ppid:
         return False
-    alive = probe()
+    # PID du processus qui a lancé le worker (la GUI), pas os.getppid() : en onefile
+    # le worker passe par son propre bootloader, qui serait alors le « parent ».
+    alive = windows_parent_probe(pid=ppid) if probe is None else probe(ppid)
     if alive is None:
         return False
     start(alive, lambda: None)

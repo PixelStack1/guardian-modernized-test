@@ -205,20 +205,26 @@ def test_worker_parent_watchdog_only_in_mp_children(monkeypatch):
 
     from util import parentwatch
 
-    started = []
+    class Parent:
+        pid = 4242
+
+    started, seen = [], []
+
+    def start(*a):
+        started.append(a)
+
+    def probe(pid):
+        seen.append(pid)
+        return lambda: True
+
     monkeypatch.setattr(parentwatch, "_worker_watch_started", False)
     monkeypatch.setattr(multiprocessing, "parent_process", lambda: None)
-    assert not parentwatch.watch_worker_parent(lambda: lambda: True, started.append)
-    monkeypatch.setattr(multiprocessing, "parent_process", lambda: object())
-    assert not parentwatch.watch_worker_parent(
-        lambda: None, lambda *a: started.append(a)
-    )
-    assert parentwatch.watch_worker_parent(
-        lambda: lambda: True, lambda *a: started.append(a)
-    )
-    assert not parentwatch.watch_worker_parent(  # idempotent
-        lambda: lambda: True, lambda *a: started.append(a)
-    )
+    assert not parentwatch.watch_worker_parent(probe, start)  # processus principal
+    monkeypatch.setattr(multiprocessing, "parent_process", lambda: Parent())
+    assert not parentwatch.watch_worker_parent(lambda pid: None, start)
+    assert parentwatch.watch_worker_parent(probe, start)
+    assert seen == [4242]  # PID du lanceur (GUI), pas os.getppid()
+    assert not parentwatch.watch_worker_parent(probe, start)  # idempotent
     assert len(started) == 1
 
 
