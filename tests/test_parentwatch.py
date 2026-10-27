@@ -23,17 +23,24 @@ def test_watchdog_cleans_up_then_exits_when_parent_dies():
     assert calls == ["cleanup", "exit0"]
 
 
-def test_watchdog_exits_even_if_cleanup_raises():
+def test_watchdog_logs_cleanup_error_and_still_exits(caplog):
+    import logging
+
     done = threading.Event()
 
     def boom():
         raise RuntimeError("x")
 
-    t = parentwatch.start_parent_watchdog(
-        lambda: False, boom, lambda c: done.set(), 0.01
+    with caplog.at_level(logging.ERROR, logger="debugger"):
+        t = parentwatch.start_parent_watchdog(
+            lambda: False, boom, lambda c: done.set(), 0.01
+        )
+        assert done.wait(2)
+        t.join(2)
+    assert any(
+        r.name == "debugger" and r.exc_info and "x" in str(r.exc_info[1])
+        for r in caplog.records
     )
-    assert done.wait(2)
-    t.join(2)
 
 
 def test_probe_uses_handle_and_fails_open():

@@ -11,6 +11,7 @@ cleanup (pre-cleanup, children, driver unregister) and exits.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -72,6 +73,10 @@ def start_parent_watchdog(
                 continue
             try:
                 on_parent_exit()
+            except Exception:
+                logging.getLogger("debugger").exception(
+                    "parent watchdog: cleanup after parent exit failed"
+                )
             finally:
                 exit_fn(0)
             return
