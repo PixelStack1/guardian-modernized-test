@@ -127,3 +127,27 @@ WinDivertShutdown) avant la fermeture, ou recv avec timeout.
   `udp or tcp`, 10 s, compteur seulement (aucune adresse, aucun envoi), fermé avant
   WM_CLOSE ; 0 paquet => WARN.
 - Lot 9 (non fait) : TerminateProcess après le join du nettoyage borné.
+
+### Cause racine relevée et correctif (runs 40589605387 tentative 5, 40594985005)
+
+Traceback capturé (boîte du chargeur + `ci-crash.log`) : après le kill de la GUI,
+le nettoyage orphelin (WinDivertShutdown + fermeture) fait échouer la lecture en
+cours (`BrokenPipeError` WinError 232) ; le `finally` d'`open_windivert` refermait
+le même handle (`OSError` WinError 6) ; l'exception sortait de la cible Process et
+multiprocessing l'écrivait sur `sys.stderr`, qui vaut `None` dans l'exe fenêtré
+(`AttributeError`). Le chargeur affichait alors « Unhandled exception in script »
+(boîte modale qui fige l'enfant), le service restait STOPPED mais enregistré
+(pas de 1060), le chargeur ne pouvait pas supprimer `_MEI*` (« Warning ») et la
+relance ne pouvait pas démarrer le pilote.
+
+Correctif : fermeture unique du handle (try/finally, propriétaire unique), fin
+propre de la capture après un arrêt orphelin, aucune exception vers
+multiprocessing (erreur inattendue : journal + sortie 1), flux standard non nuls
+dans les enfants. Au démarrage, le pilote doit être RUNNING (attente bornée 10 s,
+chargement/ouverture bornés 30 s), sinon message explicite et sortie ; en mode
+sonde CI aucune boîte modale n'est affichée.
+
+Banc, étape kill-child (contrôles stricts, FAIL bloquant) : état du service
+journalisé à chaque run (`kill_child.service_state`), suppression complète exigée
+(`sc query` -> 1060), aucune boîte « Unhandled exception in script » / « Warning »
+(au kill-child et à la relance, texte relevé dans `dialogs_<tag>.txt`).
