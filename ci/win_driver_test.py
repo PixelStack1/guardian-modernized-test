@@ -10,9 +10,6 @@ import time
 sys.path.insert(0, "guardian")
 import pydivert  # noqa: E402
 
-# Preuve que le test Windows utilise le VRAI pilote, jamais le faux de tests/_fakes.
-assert not getattr(pydivert, "FAKE", False)
-
 from network import sessions as s  # noqa: E402
 
 PORTS = [6672, 61455, 61456, 61457, 61458]

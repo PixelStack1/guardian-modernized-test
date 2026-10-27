@@ -25,4 +25,3 @@ repos:
           - types-colorama
           - types-tqdm
           - types-requests
-          - PySide6

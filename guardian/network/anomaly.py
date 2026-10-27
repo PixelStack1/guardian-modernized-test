@@ -10,9 +10,7 @@ partir d'enregistrements réels (mode enregistrement, voir network/recorder.py).
 
 from __future__ import annotations
 
-import math
 import statistics
-from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -70,46 +68,6 @@ MAX_PEERS = 512
 # Nombre maximal de ports sources mémorisés par pair (rapport d'incident).
 MAX_PORTS_PER_PEER = 16
 
-# Règle absolue du bouclier (valeur validée par l'utilisateur) : une IP qui
-# soutient > SHIELD_PPS paquets/s (fenêtre glissante d'1 s) pendant SHIELD_SECONDS
-# consécutives
-# passe directement en rouge (« reason.rate »), même pendant l'apprentissage.
-# S'ajoute à la règle x5 / 100 paquets/s ci-dessus. Réglable dans data.json.
-SHIELD_PPS_KEY = "shield_pps"
-SHIELD_PPS = 80
-SHIELD_PPS_MIN, SHIELD_PPS_MAX = 20, 1000
-SHIELD_SECONDS_KEY = "shield_seconds"
-SHIELD_SECONDS = 5.0
-SHIELD_SECONDS_MIN, SHIELD_SECONDS_MAX = 1.0, 60.0
-# Borne mémoire des horodatages de la fenêtre d'1 s, par pair.
-# Tolérance flottante sur les bornes de fenêtre / durée.
-_EPS = 1e-6
-# Bouclier absolu : mémoire fixe par IP, ratio par tranche, facteur d'inondation.
-RATE_CAP = 8192
-SLICE_RATIO = 0.75
-FLOOD_FACTOR = 3
-MIN_SLICES = 3
-SATURATION_MIN_AGE = 1.0
-COMPACT_AT = 1024
-
-
-def _clamp(raw: object, default: float, lo: float, hi: float) -> float:
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-        return default
-    v = float(raw)
-    if v != v or v in (float("inf"), float("-inf")):
-        return default
-    return max(lo, min(hi, v))
-
-
-def clamp_shield_pps(raw: object) -> int:
-    return int(_clamp(raw, SHIELD_PPS, SHIELD_PPS_MIN, SHIELD_PPS_MAX))
-
-
-def clamp_shield_seconds(raw: object) -> float:
-    return _clamp(raw, SHIELD_SECONDS, SHIELD_SECONDS_MIN, SHIELD_SECONDS_MAX)
-
-
 # Un pair est « connecté » s'il a envoyé un paquet dans ce délai (cf. ConnectionStats).
 CONNECTED_SECONDS = 5.0
 
@@ -125,54 +83,6 @@ LEVEL_KEYS = {
     Level.INHABITUEL: "level.inhabituel",
     Level.SUSPECT: "level.suspect",
 }
-
-
-class TimeWindow:
-    """Horodatages croissants avec purge incrémentale par la gauche et comptage
-    par bisect (O(log n)). Mémoire bornée par ``cap``."""
-
-    __slots__ = ("_ts", "_head", "_cap")
-
-    def __init__(self) -> None:
-        self._ts: list[float] = []
-        self._head = 0
-        self._cap = 1 << 62
-
-    def __len__(self) -> int:
-        return len(self._ts) - self._head
-
-    def add(self, ts: float, older_than: float, cap: int) -> None:
-        if self._ts and ts < self._ts[-1]:
-            ts = self._ts[-1]  # horloge non monotone : on garde l'ordre
-        self._ts.append(ts)
-        self._cap = cap
-        self._head = max(
-            bisect_right(self._ts, older_than, self._head), len(self._ts) - cap
-        )
-        # R1 : compactage dès 1024 éléments morts -> stockage <= cap + 1024.
-        if self._head >= COMPACT_AT:
-            del self._ts[: self._head]
-            self._head = 0
-
-    def prune(self, older_than: float) -> None:
-        """Oublie les éléments <= ``older_than`` (fenêtre raccourcie)."""
-        self._head = bisect_right(self._ts, older_than, self._head)
-        if self._head >= COMPACT_AT:
-            del self._ts[: self._head]
-            self._head = 0
-
-    @property
-    def last(self) -> float:
-        return self._ts[-1] if len(self) else float("-inf")
-
-    def saturated(self, span: float) -> bool:
-        """Plafond atteint alors que les éléments couvrent moins de ``span``."""
-        return len(self) >= self._cap and self._ts[-1] - self._ts[self._head] < span
-
-    def count(self, lo: float, hi: float) -> int:
-        """Éléments dans (lo, hi]."""
-        hi_i: int = bisect_right(self._ts, hi, self._head)
-        return hi_i - bisect_right(self._ts, lo, self._head)
 
 
 @dataclass
@@ -244,9 +154,6 @@ class PeerState:
     total_bytes: int = 0
     peak_pps: float = 0.0
     ports: set[int] = field(default_factory=set)
-    # Règle absolue : horodatages de la dernière seconde et début de la période
-    # où le débit d'1 s est resté >= shield_pps (None = sous le seuil).
-    rate_ts: TimeWindow = field(default_factory=lambda: TimeWindow())
 
     def learning(self, now: float) -> bool:
         return now - self.first_seen < BASELINE_SECONDS
@@ -255,30 +162,8 @@ class PeerState:
 class SessionMonitor:
     """Suit tous les pairs et calcule leur niveau d'anomalie."""
 
-    def __init__(
-        self, shield_pps: object = SHIELD_PPS, shield_seconds: object = SHIELD_SECONDS
-    ) -> None:
+    def __init__(self) -> None:
         self.peers: dict[str, PeerState] = {}
-        # Borne mémoire : au-delà, la moyenne dépasse forcément tout seuil permis.
-        self.rate_cap = RATE_CAP
-        self.set_shield(shield_pps, shield_seconds)
-
-    def set_shield(self, shield_pps: object, shield_seconds: object) -> None:
-        """Change le seuil et le délai du bouclier en gardant l'état cohérent.
-
-        Reborne les deux valeurs, recalcule le nombre de tranches d'1 s et la
-        rétention. Si la rétention raccourcit, les horodatages trop anciens sont
-        oubliés tout de suite ; si elle s'allonge, l'historique déjà conservé reste
-        valide (il couvre simplement moins que la nouvelle fenêtre au début)."""
-        self.shield_pps = clamp_shield_pps(shield_pps)
-        self.shield_seconds = clamp_shield_seconds(shield_seconds)
-        self.slices = max(MIN_SLICES, math.ceil(self.shield_seconds - _EPS))
-        # Horodatages conservés : fenêtre de moyenne ET tranches d'1 s.
-        self.retention = max(self.shield_seconds, float(self.slices))
-        for peer in self.peers.values():
-            last = peer.rate_ts.last
-            if last != float("-inf"):
-                peer.rate_ts.prune(last - self.retention + _EPS)
 
     # -- alimentation ----------------------------------------------------
     def add_packet(
@@ -298,7 +183,6 @@ class SessionMonitor:
         if port is not None and len(peer.ports) < MAX_PORTS_PER_PEER:
             peer.ports.add(int(port))
         peer.window.add(ts, size)
-        self._track_rate(peer, ts)
         peer.max_size_ever = max(peer.max_size_ever, size)
         if peer.learning(ts):
             bucket = int(ts - peer.first_seen)
@@ -312,56 +196,6 @@ class SessionMonitor:
                 peer.tiny_run_size, peer.tiny_run_length = size, 1
         else:
             peer.tiny_run_size, peer.tiny_run_length = -1, 0
-
-    def _track_rate(self, peer: PeerState, ts: float) -> None:
-        peer.rate_ts.add(ts, ts - self.retention + _EPS, self.rate_cap)
-
-    def _count(self, peer: PeerState, lo: float, hi: float) -> int:
-        """Paquets sur (lo, hi], en O(log n) (bisect)."""
-        return peer.rate_ts.count(lo + _EPS, hi + _EPS)
-
-    def window_count(self, peer: PeerState, now: float) -> int:
-        """Paquets sur (now - shield_seconds, now]."""
-        return self._count(peer, now - self.shield_seconds, now)
-
-    def rate(self, peer: PeerState, now: float) -> int:
-        """Débit moyen réel (paquets/s) sur les shield_seconds dernières secondes."""
-        return round(self.window_count(peer, now) / self.shield_seconds)
-
-    def sustained(self, peer: PeerState, now: float) -> bool:
-        """Dépassement soutenu à ``now`` si l'une des règles suivantes est vraie :
-
-        1. Saturation (F1/F4) : la mémoire bornée (RATE_CAP horodatages) est pleine
-           alors qu'elle couvre moins que la période retenue, le dernier paquet a
-           moins d'1 s, et l'IP est vue depuis au moins SATURATION_MIN_AGE (1 s).
-           Choix : pas d'exigence d'ancienneté shield_seconds ici, car remplir
-           8192 horodatages en < shield_seconds suppose déjà > 1600 paquets/s en
-           moyenne (défaut 5 s) ; un pic de 2 s sous 4096 paquets/s ne sature pas.
-        2. Inondation (F3) : plus de 3 × shield_pps × shield_seconds paquets sur la
-           fenêtre, quel que soit le nombre de tranches ou l'ancienneté.
-        3. Règle normale : IP vue depuis au moins shield_seconds, plus de
-           shield_pps × shield_seconds paquets sur la fenêtre, et au moins N-1 des
-           N dernières tranches d'1 s (N = ceil(shield_seconds), minimum 3) avec
-           chacune plus de 75 % de shield_pps (F2/F5)."""
-        q = peer.rate_ts
-        if (
-            q.saturated(self.retention)
-            and now - q.last < 1.0
-            and now - peer.first_seen >= SATURATION_MIN_AGE - _EPS
-        ):
-            return True
-        count = self.window_count(peer, now)
-        budget = self.shield_pps * self.shield_seconds
-        if count > FLOOD_FACTOR * budget + _EPS:
-            return True
-        if now - peer.first_seen < self.shield_seconds - _EPS or count <= budget + _EPS:
-            return False
-        busy = sum(
-            1
-            for k in range(self.slices)
-            if self._count(peer, now - k - 1, now - k) > SLICE_RATIO * self.shield_pps
-        )
-        return busy >= self.slices - 1
 
     def _make_room(self, now: float) -> bool:
         """Libère une place en oubliant le pair vu le moins récemment s'il est inactif."""
@@ -441,19 +275,6 @@ class SessionMonitor:
                     )
                     keys.append("reason.burst")
                     severe = ratio >= BURST_RATIO_SEVERE
-
-            if self.sustained(peer, now):
-                reasons.insert(
-                    0,
-                    t(
-                        "anomaly.rate",
-                        pps=self.rate(peer, now),
-                        max=self.shield_pps,
-                        seconds=self.shield_seconds,
-                    ),
-                )
-                keys.insert(0, "reason.rate")
-                severe = True
 
             if not top:
                 others_max = 0

@@ -1,5 +1,4 @@
 import json
-import sys
 from unittest import mock
 
 import pytest
@@ -169,8 +168,4 @@ def test_data_dir_falls_back_to_home(tmp_path, monkeypatch):
 
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     monkeypatch.setattr(paths.Path, "home", classmethod(lambda cls: tmp_path))
-    if sys.platform == "win32":
-        expected = tmp_path / "AppData" / "Local" / "Guardian"  # F4 (lot 3)
-    else:
-        expected = tmp_path / "Guardian"
-    assert paths.data_dir() == expected
+    assert paths.data_dir() == tmp_path / "Guardian"
