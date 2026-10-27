@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 FILE_NAME = "recidivistes.json"
 MAX_ENTRIES = 2000
 MAX_REASON = 64
+# Lot 3 (F3) : fichier plus gros ignoré (liste vide + avertissement).
+MAX_FILE_BYTES = 2 * 1024 * 1024
 
 
 @dataclass
@@ -75,6 +77,8 @@ def _parse(value: object) -> Offender | None:
     if isinstance(count, bool) or not isinstance(reason, str):
         return None
     assert isinstance(first, (int, float)) and isinstance(last, (int, float))
+    # Lot 3 (F2) : caractères de contrôle/ANSI retirés.
+    reason = "".join(c for c in reason if c.isprintable())
     return Offender(float(first), float(last), count, reason[:MAX_REASON])
 
 
@@ -110,6 +114,11 @@ class OffenderStore:
         try:
             path = self._file()
             if not path.exists():
+                return {}
+            if path.stat().st_size > MAX_FILE_BYTES:
+                logger.warning(
+                    "%s ignoré : plus de %d octets", FILE_NAME, MAX_FILE_BYTES
+                )
                 return {}
             raw = json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:

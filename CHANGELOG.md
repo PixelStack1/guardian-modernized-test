@@ -1,5 +1,18 @@
 # Changelog
 
+## Non publié — Lot 3 (filtres d'information)
+
+- Pays : FR, BE, CH, CA (+ `trusted_countries` de data.json) jamais bloqués ; autres pays
+  signalés seulement (badge `PAYS`). Base hors ligne existante (sapics geo-whois-asn-country, CC0).
+- Ping estimé passif (best-effort, `ping_max_ms`, défaut 150 ms) : signalement seul.
+- Débit par joueur : alerte à 60 paquets/s entrants par IP (`rate_limit_pps`).
+- Badge VPN/hébergeur : liste locale (sapics origin-asn, PDDL-1.0, tools/build_vpn.py) ;
+  `vpn_flag` ON, `vpn_auto_block` OFF par défaut.
+- Correctifs d'audit : F1 `seen_overflow` (verrou fail-safe + alerte « liste pleine »),
+  F2 caractères non imprimables retirés, F3 recidivistes.json > 2 Mo ignoré,
+  F4 repli `~/AppData/Local/Guardian`, F5 rotation supprime les `.tmp-*.csv` périmés.
+- Rejeu : `--filtres`, `--vpn-blocage`.
+
 ## 3.6.1
 
 - Session en direct : mots d'état ACTIVÉ/désactivé (ON/off) en vert/rouge pour le bouclier auto,

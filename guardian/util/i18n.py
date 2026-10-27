@@ -356,6 +356,36 @@ STRINGS: dict[str, dict[str, str]] = {
         "never Rockstar servers) — friends: {n} (key F)",
     },
     "live.panic_on": {"fr": "PANIQUE ACTIVE", "en": "PANIC ON"},
+    "live.ev.foreign": {
+        "fr": "Pays hors confiance : {ip} ({cc}) — signalé seulement",
+        "en": "Untrusted country: {ip} ({cc}) — flagged only",
+    },
+    "live.ev.vpn": {
+        "fr": "VPN/hébergeur probable : {ip} (liste locale indicative)",
+        "en": "Likely VPN/hosting: {ip} (local indicative list)",
+    },
+    "live.ev.rate": {
+        "fr": "Débit élevé : {ip} à {pps} paquets/s (seuil {max}) — alerte",
+        "en": "High rate: {ip} at {pps} pkt/s (limit {max}) — alert",
+    },
+    "live.ev.ping": {
+        "fr": "Ping estimé élevé : {ip} ~{ms} ms (seuil {max} ms, estimation passive)",
+        "en": "High estimated ping: {ip} ~{ms} ms (limit {max} ms, passive estimate)",
+    },
+    "live.lock_full": {
+        "fr": "Liste pleine ({max} IP vues) : le verrou laisse passer les IP inconnues",
+        "en": "List full ({max} IPs seen): the lock lets unknown IPs through",
+    },
+    "live.ev.lock_refused_full": {
+        "fr": "Verrou refusé : liste des IP vues pleine ({max}), il serait inefficace",
+        "en": "Lock refused: seen-IP list full ({max}), it would be ineffective",
+    },
+    "anomaly.rate": {
+        "fr": "débit soutenu {pps} paquets/s > {max} pendant {seconds:g} s",
+        "en": "sustained rate {pps} pkt/s > {max} for {seconds:g}s",
+    },
+    "reason.rate": {"fr": "débit soutenu", "en": "sustained rate"},
+    "reason.vpn": {"fr": "VPN/hébergeur", "en": "VPN/hosting"},
     "live.ev.panic_toggled": {
         "fr": "Bouton panique : {state}",
         "en": "Panic button: {state}",

@@ -171,6 +171,9 @@ class LivePolicy:
     panic: bool = False
     bypass: Callable[[str], bool] | None = None
     max_seen: int = MAX_SEEN
+    # Lot 3 (F1) : la liste des IP vues a débordé (max_seen atteint). Le verrou
+    # laisse alors passer les IP inconnues (fail-safe) et l'affichage alerte.
+    seen_overflow: bool = False
 
     def drop(self, inbound: bool, ip: str) -> bool:
         if not inbound:
@@ -187,9 +190,12 @@ class LivePolicy:
             if ip in self.seen:
                 return False
             if self.lock_on:
-                return True
+                # Liste pleine : impossible de savoir si l'IP était déjà là -> passe.
+                return not self.seen_overflow
             if len(self.seen) < self.max_seen:
                 self.seen.add(ip)
+            else:
+                self.seen_overflow = True
             return False
         except Exception:
             return False
@@ -267,6 +273,7 @@ def capture_loop(
     offenders: MutableMapping[str, float] | None = None,
     panic_flag: Any = None,
     friends: MutableMapping[str, str] | None = None,
+    overflow_flag: Any = None,
 ) -> None:  # pragma: no cover - nécessite Windows + WinDivert
     from network.blackbox import drop_reason, meta_from_packet
     from network.sessions import open_windivert, packet_filter
@@ -308,6 +315,10 @@ def capture_loop(
             sent = handle_packet(
                 w, packet, local, local_total, now, total_on, relay_on, policy
             )
+            if policy.seen_overflow and overflow_flag is not None:
+                with contextlib.suppress(Exception):
+                    if not overflow_flag.value:
+                        overflow_flag.value = 1
             # Après la décision (et l'unique w.send) : métadonnées pour la boîte
             # noire. Toute erreur ici est ignorée, le paquet est déjà traité.
             meta: Any = None
@@ -484,6 +495,15 @@ def players_line(counter: PlayerCounter, ctrl: LiveSessionController) -> str:
     return line
 
 
+def printable(text: str) -> str:
+    """Lot 3 (F2) : ne garde que les caractères imprimables (plus d'ANSI/contrôle)."""
+    return "".join(c for c in text if c.isprintable())
+
+
+def clean_nick(nick: str, ip: str) -> str:
+    return " ".join(printable(nick).split())[:MAX_NICK] or ip
+
+
 def blacklist_label(pseudo: str, when: datetime) -> str:
     """Nom enregistré dans la Blacklist : pseudo/note + date de blocage."""
     stamp = when.strftime("%Y-%m-%d %H:%M:%S")
@@ -541,8 +561,14 @@ class LiveSessionController:
         sound: Callable[[], Any] = beep,
         friends: MutableMapping[str, str] | None = None,
         panic_flag: Any = None,
+        overflow_flag: Any = None,
+        filters: Any = None,
     ) -> None:
         self.blocked = blocked
+        # Lot 3 : débordement des IP vues (drapeau partagé) et filtres d'information.
+        self.overflow_flag = overflow_flag
+        self.seen_overflow_local = False
+        self.filters = filters
         # Liste d'amis ip -> pseudo (copie partagée lue par la capture) ; panique.
         self.friends: MutableMapping[str, str] = friends if friends is not None else {}
         self.panic_flag = panic_flag
@@ -688,7 +714,7 @@ class LiveSessionController:
     def add_friend(self, ip: str, nick: str) -> bool:
         """Ajoute un ami (pseudo tronqué). Refusé : serveur Rockstar, liste pleine.
         Un ami est retiré des blocages et des récidivistes (toujours autorisé)."""
-        nick = " ".join(nick.split())[:MAX_NICK] or ip
+        nick = clean_nick(nick, ip)
         if is_rockstar_server(ip):
             return False
         if ip not in self.friends and len(self.friends) >= MAX_FRIENDS:
@@ -714,8 +740,50 @@ class LiveSessionController:
         except Exception:
             return ip
 
-    def toggle_session_lock(self) -> None:
+    @property
+    def seen_overflow(self) -> bool:
+        if self.seen_overflow_local:
+            return True
+        return read_flag(self.overflow_flag)
+
+    def toggle_session_lock(self) -> bool:
+        """Bascule le verrou ; refuse de l'ACTIVER si la liste des IP vues est déjà
+        pleine (il laisserait passer les inconnus). Renvoie False si refusé."""
+        if not self.session_lock and self.seen_overflow:
+            self.events.append(t("live.ev.lock_refused_full", max=MAX_SEEN))
+            return False
         self.session_lock = not self.session_lock
+        return True
+
+    def vpn_block(self, ip: str) -> bool:
+        """Blocage auto d'un VPN/hébergeur (réglage vpn_auto_block, OFF par défaut).
+        Exige le bouclier auto ACTIVÉ. Mêmes garde-fous + jamais un ami, un serveur Rockstar
+        ni une IP d'un pays de confiance. 7 jours (auto_block.json)."""
+        try:
+            if (
+                not self.auto_block_available
+                or ip in self.blocked
+                or is_rockstar_server(ip)
+                or self.is_friend(ip)
+                or self.auto_block_guard(ip)
+            ):
+                return False
+            from network.filters import TRUSTED_DEFAULT
+
+            trusted = (
+                self.filters.settings.trusted
+                if self.filters is not None
+                else frozenset(TRUSTED_DEFAULT)
+            )
+            if country_code(ip) in trusted:
+                return False
+            peer = PeerState(ip=ip, first_seen=self.clock(), last_seen=self.clock())
+            peer.level = Level.SUSPECT
+            peer.reason_key = "reason.vpn"
+            # R3 : respecte le bouclier auto (jamais forcé).
+            return self.auto_block_if_needed(peer)
+        except Exception:
+            return False
 
     def toggle_offender_drop(self) -> None:
         self.offender_drop = not self.offender_drop
@@ -983,6 +1051,11 @@ def render_head(
         t("live.total_warning"),
         t("live.relay_status", state=relay_word(ctrl)),
         t("live.lock_status", state=status_word(ctrl.session_lock)),
+        *(
+            [Fore.LIGHTRED_EX + t("live.lock_full", max=MAX_SEEN) + Style.RESET_ALL]
+            if ctrl.seen_overflow
+            else []
+        ),
         t(
             "live.panic_status",
             state=(Fore.LIGHTRED_EX + t("live.panic_on") + Style.RESET_ALL)
@@ -1056,6 +1129,9 @@ def render(
             f"{s.pps:>6.0f}  {s.bps:>8.0f}  {s.avg_size:>5.0f}  {s.max_size:>5}  "
             f"{state:<10}  {ctrl.pseudos.get(p.ip, '')}"
         )
+        badges = ctrl.filters.badges(p.ip) if ctrl.filters is not None else ""
+        if badges:
+            row += f"  [{badges}]"
         color = Fore.CYAN if server else LEVEL_COLORS[p.level]
         rows.append(color + row + Style.RESET_ALL if color else row)
         if p.alert:
@@ -1297,7 +1373,8 @@ def handle_key(
                 logger.debug("sauvegarde de %s impossible", RELAY_KEY, exc_info=True)
         set_toggle_msg(ctrl, t("live.ev.relay_toggled", state=relay_word(ctrl)))
     elif key == "v":
-        ctrl.toggle_session_lock()
+        if not ctrl.toggle_session_lock():
+            return
         _save(config, SESSION_LOCK_KEY, ctrl.session_lock)
         set_toggle_msg(
             ctrl, t("live.ev.lock_toggled", state=status_word(ctrl.session_lock))
@@ -1380,7 +1457,7 @@ def load_friends(raw: object) -> dict[str, str]:
         except (ValueError, TypeError):
             continue
         if isinstance(nick, str) and not is_rockstar_server(ip):
-            out[ip] = " ".join(nick.split())[:MAX_NICK] or ip
+            out[ip] = clean_nick(nick, ip)
     return out
 
 
@@ -1489,10 +1566,23 @@ class BackgroundSession:
                     offender_line = self.ctrl.offender_check(ip, inbound)
                 if offender_line:
                     self._blackbox_trigger("recidiviste", ts)
+                self._filters(ts, ip, inbound)
                 if inbound:
                     self.monitor.add_packet(ip, size, ts, port)
         except queue.Empty:
             pass
+
+    def _filters(self, ts: float, ip: str, inbound: bool) -> None:
+        """Lot 3 : alertes pays/ping/débit/VPN (signalement seul ; le blocage VPN
+        n'a lieu que si vpn_auto_block est activé). Jamais d'exception."""
+        filters = self.ctrl.filters
+        if filters is None or self.ctrl.is_friend(ip):
+            return
+        with contextlib.suppress(Exception):
+            for key, kw in filters.observe(ts, ip, inbound):
+                self.ctrl.events.append(t(key, **kw))
+            if inbound and filters.wants_vpn_block(ip):
+                self.ctrl.vpn_block(ip)
 
     def evaluate(self) -> None:
         with self.lock:
@@ -1722,16 +1812,20 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
     offender_flag = Value("b", 0)
     offender_ips: MutableMapping[str, float] = manager.dict()
     panic_flag = Value("b", 0)
+    overflow_flag = Value("b", 0)
     friends: MutableMapping[str, str] = manager.dict()
     friends.update(load_friends(config.data.get(FRIENDS_KEY)))
     packets: Queue[Packet] = Queue(QUEUE_MAX)
     from config.globallist import Whitelist
     from menu.menu import Menu  # import tardif : menu.py importe ce module
     from network import autoblock
+    from network.anomaly import SHIELD_PPS_KEY, SHIELD_SECONDS_KEY
     from network.incident import ReportWriter, build_report
     from network.offenders import OffenderStore
 
-    monitor = SessionMonitor()
+    monitor = SessionMonitor(
+        config.data.get(SHIELD_PPS_KEY), config.data.get(SHIELD_SECONDS_KEY)
+    )
     player_counter = PlayerCounter()
     writer = ReportWriter()
 
@@ -1768,6 +1862,8 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
         offender_flag=offender_flag,
         friends=friends,
         panic_flag=panic_flag,
+        overflow_flag=overflow_flag,
+        filters=make_filters(config.data),
         # Lecture une seule fois, avant le démarrage de la capture.
         auto_entries=autoblock.load(time.time(), guard, max_seconds=AUTO_BLOCK_SECONDS)
         if ranges_ok
@@ -1789,6 +1885,7 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
             offender_ips,
             panic_flag,
             friends,
+            overflow_flag,
         ),
         daemon=True,
     )
@@ -1805,6 +1902,15 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
         blocked=blocked,
         new_players=make_new_player_tracker(),
         blackbox=BlackBox(seconds=clamp_seconds(config.data.get(RECORDING_KEY))),
+    )
+
+
+def make_filters(data: Any) -> Any:
+    """Filtres du lot 3 (réglages de data.json). Amis et Rockstar : jamais signalés."""
+    from network.filters import FilterSettings, PeerFilters
+
+    return PeerFilters(
+        FilterSettings.from_config(data), is_protected=is_rockstar_server
     )
 
 
