@@ -377,3 +377,18 @@ def test_ci_diag_only_in_probe_mode_and_spawn_logged(monkeypatch, tmp_path):
     monkeypatch.setenv(cimode.DRY_ENV, "0")
     for rel in ("menu/livesession.py", "network/sessions.py"):
         assert "log_spawn(" in (ROOT / "guardian" / rel).read_text("utf-8")
+
+
+def test_capture_process_target_is_armed(monkeypatch):
+    from util import parentwatch
+
+    calls = []
+    monkeypatch.setattr(
+        parentwatch,
+        "arm_with_pid",
+        lambda pid, purpose, **k: calls.append((pid, purpose)),
+    )
+    parentwatch.armed_target(77, "live capture", lambda a, b: calls.append(a + b), 1, 2)
+    assert calls == [(77, "live capture"), 3]
+    src = (ROOT / "guardian" / "menu" / "livesession.py").read_text("utf-8")
+    assert "target=parentwatch.armed_target" in src

@@ -192,7 +192,12 @@ def log_spawn(purpose: str, pid: Any) -> None:
     ci_diag(f"spawned child pid={pid} purpose={purpose}")
 
 
-def arm_with_pid(gui_pid: int, purpose: str = "child") -> None:
+def arm_with_pid(
+    gui_pid: int,
+    purpose: str = "child",
+    on_exit: Callable[[], object] | None = None,
+    cleanup_timeout: float = WORKER_CLEANUP_S,
+) -> None:
     """Entrée d'un enfant (initialiseur Manager / début de cible Process) : fil
     dédié qui attend la fin du processus ``gui_pid`` (OpenProcess SYNCHRONIZE +
     WaitForSingleObject INFINITE) puis ``os._exit(0)``. Indépendant des autres
@@ -220,6 +225,12 @@ def arm_with_pid(gui_pid: int, purpose: str = "child") -> None:
     def wait_then_exit() -> None:
         r = k32.WaitForSingleObject(h, 0xFFFFFFFF)
         ci_diag(f"gui gone (wait={r}) -> exit purpose={purpose}")
+        if on_exit is not None:
+            # nettoyage borné (fermeture handles + désenregistrement) puis sortie dure
+            t = threading.Thread(target=_no_raise(on_exit), daemon=True)
+            t.start()
+            t.join(cleanup_timeout)
+            ci_diag(f"cleanup done={not t.is_alive()} purpose={purpose}")
         os._exit(0)
 
     threading.Thread(target=wait_then_exit, name="gui-watch", daemon=True).start()
@@ -261,6 +272,26 @@ def auto_arm(argv: list[str] | None = None) -> bool:
         )
     except Exception:
         return False
+
+
+def _no_raise(fn: Callable[[], object]) -> Callable[[], None]:
+    def run() -> None:
+        with contextlib.suppress(Exception):
+            fn()
+
+    return run
+
+
+def armed_target(
+    gui_pid: int, purpose: str, target: Callable[..., object], *args: object
+) -> None:
+    """Cible de Process : arme le chien de garde GUI dans le point d'entrée réel
+    de l'enfant, puis exécute ``target``. Nettoyage driver borné à la sortie."""
+    with contextlib.suppress(Exception):
+        from util.driver import orphan_cleanup
+
+        arm_with_pid(gui_pid, purpose, on_exit=orphan_cleanup)
+    target(*args)
 
 
 auto_arm()

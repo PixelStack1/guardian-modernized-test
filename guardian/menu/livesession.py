@@ -17,6 +17,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import logging
+import os
 import queue
 import re
 import shutil
@@ -1983,8 +1984,11 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
     if ranges_ok:
         saver.request(ctrl.auto_entries)  # réécrit le fichier purgé/filtré
     proc = Process(
-        target=capture_loop,
+        target=parentwatch.armed_target,
         args=(
+            os.getpid(),
+            "live capture",
+            capture_loop,
             blocked,
             packets,
             extra_ports_enabled(),
