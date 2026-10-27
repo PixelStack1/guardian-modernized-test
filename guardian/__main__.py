@@ -84,7 +84,17 @@ if __name__ == "__main__":
         from util.driver import orphan_cleanup as _orphan
 
         _pw.watch_spawn_parent(sys.argv, on_parent_exit=_orphan)
-    freeze_support()
+        _pw.install_ci_thread_hook()
+    try:
+        freeze_support()
+    except BaseException as _exc:
+        # Diagnostic CI (inerte sinon) : traceback complet de l'enfant, puis relance.
+        if not (isinstance(_exc, SystemExit) and _exc.code in (0, None)):
+            with contextlib.suppress(Exception):
+                from util import parentwatch as _pwc
+
+                _pwc.ci_traceback("multiprocessing child (freeze_support)")
+        raise
     # Audit R1/R3 : APRÈS freeze_support (un enfant multiprocessing y est aiguillé et
     # n'atteint jamais ce point : il garde l'état transmis par la GUI). Le processus
     # principal n'hérite jamais d'un état CI/pilote venu de l'extérieur.

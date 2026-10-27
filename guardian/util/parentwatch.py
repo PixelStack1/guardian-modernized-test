@@ -192,6 +192,66 @@ def ci_diag(line: str) -> None:
             f.write(f"{time.time():.3f} pid={os.getpid()} {line}\n")
 
 
+CRASH_LOG = "ci-crash.log"
+
+
+def ci_crash_path() -> str:
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "Guardian", CRASH_LOG)
+
+
+def ci_traceback(where: str, text: str | None = None) -> None:
+    """Traceback complet d'une exception non gérée (enfant multiprocessing, fil),
+    écrit UNIQUEMENT en mode sonde CI dans %LOCALAPPDATA%\\Guardian\\ci-crash.log.
+    En exe fenêtré, sys.stderr vaut None : sans ce journal, le traceback n'existe
+    que dans la boîte « Unhandled exception in script » du chargeur. Inerte sinon,
+    jamais d'exception."""
+    try:
+        from util import cimode
+
+        if not cimode.dry():
+            return
+    except Exception:
+        return
+    with contextlib.suppress(Exception):
+        import traceback
+
+        body = text if text is not None else traceback.format_exc()
+        path = ci_crash_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(
+                f"=== {time.time():.3f} pid={os.getpid()} where={where} "
+                f"argv={sys.argv[1:4]}\n{body}\n"
+            )
+
+
+def install_ci_thread_hook() -> None:
+    """Mode sonde CI : les exceptions non gérées des fils sont aussi journalisées
+    (puis transmises au crochet précédent). Inerte hors CI."""
+    with contextlib.suppress(Exception):
+        from util import cimode
+
+        if not cimode.dry():
+            return
+        previous = threading.excepthook
+
+        def hook(args: Any) -> None:
+            import traceback
+
+            text = "".join(
+                traceback.format_exception(
+                    args.exc_type, args.exc_value, args.exc_traceback
+                )
+            )
+            name = getattr(args.thread, "name", "?")
+            ci_traceback(f"thread {name}", text)
+            with contextlib.suppress(Exception):
+                previous(args)
+
+        threading.excepthook = hook
+
+
 def log_spawn(purpose: str, pid: Any) -> None:
     """PID + rôle de chaque enfant lancé (journal + diagnostic CI)."""
     logging.getLogger(__name__).info("spawned child pid=%s purpose=%s", pid, purpose)
@@ -303,7 +363,11 @@ def armed_target(
         from util.driver import orphan_cleanup
 
         arm_with_pid(gui_pid, purpose, on_exit=orphan_cleanup)
-    target(*args)
+    try:
+        target(*args)
+    except BaseException:
+        ci_traceback(f"target {purpose}")  # diagnostic CI seulement
+        raise
 
 
 def _sentinel_cleanup(owned: Any) -> Callable[[], object]:

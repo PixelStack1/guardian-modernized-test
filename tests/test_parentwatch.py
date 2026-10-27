@@ -2,6 +2,8 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
+
 from util import parentwatch
 
 
@@ -137,3 +139,43 @@ def test_concurrent_cleanup_second_caller_waits_for_unregister():
     assert second_done.wait(5)
     first.join(5)
     assert events == ["unregister", "second-returned"]
+
+
+def _ci_env(monkeypatch, tmp_path, dry: bool) -> None:
+    from util import cimode
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv(cimode.PROBE_ENV, "1")
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv(cimode.DRY_ENV, "1" if dry else "0")
+
+
+def test_ci_traceback_inert_outside_ci_probe(monkeypatch, tmp_path):
+    _ci_env(monkeypatch, tmp_path, dry=False)
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        parentwatch.ci_traceback("test")
+    assert not (tmp_path / "Guardian" / parentwatch.CRASH_LOG).exists()
+
+
+def test_ci_traceback_writes_full_traceback_in_ci_probe(monkeypatch, tmp_path):
+    _ci_env(monkeypatch, tmp_path, dry=True)
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        parentwatch.ci_traceback("test")
+    text = (tmp_path / "Guardian" / parentwatch.CRASH_LOG).read_text("utf-8")
+    assert "where=test" in text and "Traceback" in text and "ValueError: boom" in text
+
+
+def test_armed_target_logs_and_reraises(monkeypatch, tmp_path):
+    _ci_env(monkeypatch, tmp_path, dry=True)
+
+    def target() -> None:
+        raise OSError("recv failed")
+
+    with pytest.raises(OSError):
+        parentwatch.armed_target(0, "live capture", target)
+    text = (tmp_path / "Guardian" / parentwatch.CRASH_LOG).read_text("utf-8")
+    assert "target live capture" in text and "OSError: recv failed" in text
