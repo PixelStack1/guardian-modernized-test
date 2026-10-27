@@ -86,3 +86,15 @@ après le désenregistrement, et ExitProcess attend la fin de cette E/S.
 Impact : le processus n'a plus d'accès au driver (service supprimé), il n'émet rien
 et ne filtre plus rien. Pas de fail-closed. Piste : annuler l'E/S (CancelIoEx/
 WinDivertShutdown) avant la fermeture, ou recv avec timeout.
+
+### Mise à jour : sentinelle pilote et statut WARN
+
+- Un processus « driver sentinel » est lancé et armé (OpenProcess SYNCHRONIZE sur
+  le PID GUI) **avant** `driver.start()`. Il n'y a donc plus de fenêtre où le pilote
+  est chargé sans gardien. Si la GUI meurt, il exécute le nettoyage borné (4 s) :
+  désenregistrement seulement si Guardian a chargé le pilote (valeur partagée
+  `owned`, mise à 1 après le chargement). Le serveur Manager exécute le même nettoyage.
+- Le harnais rapporte « taskkill /F child PID: process tree exited » en **WARN —
+  KNOWN RESERVE**, avec le temps mesuré (non bloquant). Tous les contrôles
+  « WinDivert gone » restent stricts (FAIL bloquant). Le harnais n'attend pas
+  l'armement avant le kill : le cas du kill précoce reste testé.

@@ -115,8 +115,14 @@ if __name__ == "__main__":
             sys.exit(3)
         logger.info("WinDivert binaries verified: %s", hashes)
         driver = DriverLifecycle(pydivert.WinDivert)
+        # Sentinelle armée AVANT le chargement : aucune fenêtre sans gardien.
+        from util import parentwatch as _pwatch
+
+        sentinel_owned = _pwatch.start_driver_sentinel()
         driver.start()
-        mark_owned(driver.loaded_by_guardian)  # pour le nettoyage par les workers
+        mark_owned(driver.loaded_by_guardian)  # hérité par les workers / Manager
+        if sentinel_owned is not None and driver.loaded_by_guardian:
+            sentinel_owned.value = 1
         # Lot 7 : notre handle (session en fond) est fermé AVANT le pilote, et le
         # nettoyage couvre aussi fermeture de console / déconnexion / arrêt.
         from menu.livesession import stop_background

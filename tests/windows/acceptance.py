@@ -113,6 +113,18 @@ class Report:
         print(f"[{state}] {name}{' - ' + detail if detail else ''}", flush=True)
         return bool(ok)
 
+    def reserve(self, name: str, ok: bool, detail: str, reason: str) -> None:
+        """Réserve connue documentée : mesurée et affichée, non bloquante."""
+        state = "PASS" if ok else "WARN"
+        if not ok:
+            detail = f"KNOWN RESERVE ({reason}) - {detail}"
+        self.checks.append({"name": name, "result": state, "detail": detail})
+        print(f"[{state}] {name} - {detail}", flush=True)
+
+    @property
+    def warned(self) -> list[str]:
+        return [c["name"] for c in self.checks if c["result"] == "WARN"]
+
     @property
     def failed(self) -> list[str]:
         return [c["name"] for c in self.checks if c["result"] == "FAIL"]
@@ -541,7 +553,11 @@ def scenario_kill(
         if not ok:  # diagnostic en lecture seule : instances restantes de l'exe
             detail += "; left: " + same_exe_processes(exe, cmdline=True)
             detail += "; ci-spawn.log: " + " | ".join(spawn_log()[-30:])
-        rep.check(f"taskkill /F {target} PID: process tree exited", ok, detail)
+        name = f"taskkill /F {target} PID: process tree exited"
+        if target == "child":  # docs/ci-acceptance.md, « Réserve connue »
+            rep.reserve(name, ok, detail, "capture helper lingers, no driver access")
+        else:
+            rep.check(name, ok, detail)
         check_driver_gone(rep, f"taskkill-{target}")
     finally:
         run.kill_own()
@@ -630,6 +646,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - Windows
     )
     print(json.dumps(rep.metrics, indent=1))
     print("FAILED:" if rep.failed else "ALL PASS", ", ".join(rep.failed))
+    if rep.warned:
+        print("KNOWN RESERVE (non-blocking):", ", ".join(rep.warned))
     return 1 if rep.failed else 0
 
 

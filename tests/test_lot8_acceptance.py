@@ -337,7 +337,9 @@ def test_managers_are_watched_and_die_with_gui(monkeypatch):
     calls = []
     monkeypatch.setattr(parentwatch, "watch_worker_parent", lambda: calls.append(1))
     monkeypatch.setattr(
-        parentwatch, "arm_with_pid", lambda pid, purpose: calls.append((pid, purpose))
+        parentwatch,
+        "arm_with_pid",
+        lambda pid, purpose, **k: calls.append((pid, purpose)),
     )
     parentwatch.arm_in_child(4242)
     assert calls == [(4242, "Manager server"), 1]
@@ -426,3 +428,28 @@ def test_cancel_pending_io_shutdown_then_cancelioex_fail_open():
 
     assert d.cancel_pending_io(H(), dll=Bad(), kernel32=Bad()) == "cancel:failed"
     assert d.cancel_pending_io(object()) == "cancel:none"
+
+
+def test_sentinel_cleanup_unregisters_only_if_owned(monkeypatch):
+    from types import SimpleNamespace
+
+    from util import driver as d
+    from util import parentwatch
+
+    calls = []
+    monkeypatch.setattr(
+        d, "orphan_cleanup", lambda: calls.append(os.environ.get(d.OWNED_ENV))
+    )
+    monkeypatch.delenv(d.OWNED_ENV, raising=False)
+    parentwatch._sentinel_cleanup(SimpleNamespace(value=0))()
+    assert calls == [None]
+    parentwatch._sentinel_cleanup(SimpleNamespace(value=1))()
+    assert calls == [None, "1"]
+    monkeypatch.delenv(d.OWNED_ENV, raising=False)
+
+
+def test_sentinel_armed_before_driver_load_and_manager_cleans():
+    src = (ROOT / "guardian" / "__main__.py").read_text("utf-8")
+    assert src.index("start_driver_sentinel()") < src.index("driver.start()")
+    pw = (ROOT / "guardian" / "util" / "parentwatch.py").read_text("utf-8")
+    assert 'arm_with_pid(gui_pid, "Manager server", on_exit=orphan_cleanup)' in pw

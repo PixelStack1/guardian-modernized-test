@@ -16,6 +16,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -244,7 +245,9 @@ def arm_with_pid(
 def arm_in_child(gui_pid: int = 0) -> None:
     """Initialiseur des serveurs Manager (point d'entrée réel du serveur)."""
     try:
-        arm_with_pid(gui_pid, "Manager server")
+        from util.driver import orphan_cleanup
+
+        arm_with_pid(gui_pid, "Manager server", on_exit=orphan_cleanup)
         watch_worker_parent()
     except Exception:
         logging.getLogger("debugger").exception("manager parent watchdog failed")
@@ -296,6 +299,50 @@ def armed_target(
 
         arm_with_pid(gui_pid, purpose, on_exit=orphan_cleanup)
     target(*args)
+
+
+def _sentinel_cleanup(owned: Any) -> Callable[[], object]:
+    def run() -> object:
+        from util.driver import OWNED_ENV, orphan_cleanup
+
+        if owned.value:  # n'agit que si Guardian a chargé le pilote
+            os.environ[OWNED_ENV] = "1"
+        return orphan_cleanup()
+
+    return run
+
+
+def driver_sentinel(gui_pid: int, owned: Any, ready: Any) -> None:
+    """Processus sentinelle armé AVANT le chargement du pilote : si la GUI meurt,
+    nettoyage borné (désenregistrement seulement si Guardian possède le pilote)."""
+    arm_with_pid(gui_pid, "driver sentinel", on_exit=_sentinel_cleanup(owned))
+    ready.set()
+    while True:
+        time.sleep(3600)
+
+
+def start_driver_sentinel(timeout: float = 15.0) -> Any:
+    """Lance la sentinelle et attend qu'elle soit armée. Retourne la valeur
+    partagée ``owned`` (à mettre à 1 après chargement), ou None. Fail-open."""
+    try:
+        import multiprocessing as mp
+
+        owned = mp.Value("b", 0, lock=False)
+        ready = mp.Event()
+        proc = mp.Process(
+            target=driver_sentinel,
+            args=(os.getpid(), owned, ready),
+            name="guardian-driver-sentinel",
+            daemon=True,
+        )
+        proc.start()
+        log_spawn("driver sentinel", proc.pid)
+        if not ready.wait(timeout):
+            ci_diag("driver sentinel not armed in time (fail-open)")
+        return owned
+    except Exception:
+        logging.getLogger("debugger").exception("driver sentinel failed")
+        return None
 
 
 auto_arm()
