@@ -270,3 +270,104 @@ def orphan_cleanup(windivert: Any = None) -> list[str]:
     except Exception as e:
         logger.warning("orphan cleanup: unregister failed: %s", e)
     return steps
+
+
+# -- état du service (lecture seule) et démarrage borné ---------------------------
+SERVICE_STATES = {
+    1: "STOPPED",
+    2: "START_PENDING",
+    3: "STOP_PENDING",
+    4: "RUNNING",
+    5: "CONTINUE_PENDING",
+    6: "PAUSE_PENDING",
+    7: "PAUSED",
+}
+ERROR_SERVICE_DOES_NOT_EXIST = 1060
+DRIVER_START_TIMEOUT_S = 30.0  # chargement + ouverture du filtre (WinDivertOpen)
+DRIVER_RUNNING_TIMEOUT_S = 10.0  # service WinDivert RUNNING après ouverture
+
+
+def service_state(name: str = "WinDivert", advapi32: Any = None) -> str:
+    """État du service pilote via le SCM, en lecture seule (SERVICE_QUERY_STATUS) :
+    RUNNING, STOPPED…, ABSENT (OpenService 1060) ou UNKNOWN(err). Jamais d'exception ;
+    handles SCM toujours refermés."""
+    try:
+        import ctypes
+        from ctypes import wintypes as wt
+
+        if advapi32 is None:
+            advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+            advapi32.OpenSCManagerW.argtypes = [wt.LPCWSTR, wt.LPCWSTR, wt.DWORD]
+            advapi32.OpenSCManagerW.restype = wt.HANDLE
+            advapi32.OpenServiceW.argtypes = [wt.HANDLE, wt.LPCWSTR, wt.DWORD]
+            advapi32.OpenServiceW.restype = wt.HANDLE
+            advapi32.CloseServiceHandle.argtypes = [wt.HANDLE]
+            advapi32.QueryServiceStatus.argtypes = [wt.HANDLE, ctypes.c_void_p]
+        scm = advapi32.OpenSCManagerW(None, None, 0x0001)  # SC_MANAGER_CONNECT
+        if not scm:
+            return f"UNKNOWN(scm {ctypes.get_last_error()})"
+        try:
+            svc = advapi32.OpenServiceW(scm, name, 0x0004)  # SERVICE_QUERY_STATUS
+            if not svc:
+                err = ctypes.get_last_error()
+                if err == ERROR_SERVICE_DOES_NOT_EXIST:
+                    return "ABSENT"
+                return f"UNKNOWN({err})"
+            try:
+                status = (wt.DWORD * 7)()
+                if not advapi32.QueryServiceStatus(svc, ctypes.byref(status)):
+                    return f"UNKNOWN(query {ctypes.get_last_error()})"
+                return SERVICE_STATES.get(int(status[1]), f"UNKNOWN({status[1]})")
+            finally:
+                advapi32.CloseServiceHandle(svc)
+        finally:
+            advapi32.CloseServiceHandle(scm)
+    except Exception as e:
+        return f"UNKNOWN({type(e).__name__})"
+
+
+def wait_running(
+    timeout: float = DRIVER_RUNNING_TIMEOUT_S,
+    state: Callable[[], str] = service_state,
+    sleep: Callable[[float], Any] | None = None,
+    clock: Callable[[], float] | None = None,
+) -> tuple[bool, str]:
+    """Attente BORNÉE du service pilote RUNNING ; (ok, dernier état lu)."""
+    import time
+
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    end = clock() + timeout
+    last = state()
+    while last != "RUNNING":
+        if clock() >= end:
+            return False, last
+        sleep(0.1)
+        last = state()
+    return True, last
+
+
+class DriverStartTimeout(RuntimeError):
+    """Chargement/ouverture du pilote non terminé dans le délai (jamais d'attente infinie)."""
+
+
+def call_bounded(fn: Callable[[], Any], timeout: float, what: str) -> Any:
+    """Exécute ``fn`` dans un fil et attend au plus ``timeout`` s. Délai dépassé :
+    DriverStartTimeout (message clair) au lieu d'un blocage silencieux. Les
+    exceptions de ``fn`` sont relancées telles quelles."""
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as e:  # relancée dans l'appelant
+            box["error"] = e
+
+    t = threading.Thread(target=run, name=f"bounded-{what}", daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise DriverStartTimeout(f"{what}: not finished after {timeout:.0f} s")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")

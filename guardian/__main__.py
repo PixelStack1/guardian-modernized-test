@@ -1,6 +1,7 @@
 import contextlib
 import ctypes
 import logging
+import os
 import sys
 import time
 from multiprocessing import freeze_support
@@ -11,7 +12,16 @@ from network.sessions import FilterOpenError, extra_ports_enabled, probe_filter
 from util import cimode
 from util.console import attach_console
 from util.crash import crash_report
-from util.driver import OWNED_ENV, DriverLifecycle, mark_owned
+from util.driver import (
+    DRIVER_RUNNING_TIMEOUT_S,
+    DRIVER_START_TIMEOUT_S,
+    OWNED_ENV,
+    DriverLifecycle,
+    DriverStartTimeout,
+    call_bounded,
+    mark_owned,
+    wait_running,
+)
 from util.i18n import t
 from util.integrity import IntegrityError, secure_windivert
 from util.paths import data_file
@@ -62,10 +72,30 @@ def close_splash() -> None:
         importlib.import_module("pyi_splash").close()
 
 
+def _ci_probe() -> bool:
+    """Banc CI en mode sonde (cimode.dry) ; jamais d'exception."""
+    try:
+        from util import cimode as _cim
+
+        return bool(_cim.dry())
+    except Exception:
+        return False
+
+
 def notify(text: str, console: bool | None = None) -> None:
     """Message utilisateur affiché UNE seule fois : console en mode ``--console``,
     sinon boîte de dialogue Windows (repli console si elle échoue)."""
     console = CONSOLE_MODE if console is None else console
+    if not console and _ci_probe():
+        # Banc CI (sonde) : pas de boîte modale sans personne pour la fermer (attente
+        # infinie) ; message journalisé (history.log + ci-crash.log), puis sortie.
+        close_splash()
+        logger.error("notify (CI probe, no modal box): %s", text)
+        with contextlib.suppress(Exception):
+            from util import parentwatch as _pwn
+
+            _pwn.ci_traceback("notify", text)
+        return
     if not console:
         close_splash()
         try:
@@ -152,7 +182,16 @@ if __name__ == "__main__":
         from util import parentwatch as _pwatch
 
         sentinel_owned = _pwatch.start_driver_sentinel()
-        driver.start()
+        try:
+            # Borné : un service bloqué (ex. marqué pour suppression) ne fige jamais
+            # le démarrage en silence.
+            call_bounded(lambda: driver.start(), DRIVER_START_TIMEOUT_S, "driver start")
+        except DriverStartTimeout as e:
+            notify(t("main.driver_timeout", e=e))
+            logger.error("WinDivert driver start timed out: %s", e)
+            os._exit(
+                6
+            )  # fil bloqué dans le pilote : sortie dure, la sentinelle nettoie
         cimode.mark("driver_loaded")
         mark_owned(driver.loaded_by_guardian)  # hérité par les workers / Manager
         if sentinel_owned is not None and driver.loaded_by_guardian:
@@ -171,12 +210,34 @@ if __name__ == "__main__":
             if probe is not None:
                 parentwatch.start_parent_watchdog(probe, driver.cleanup)
         try:
-            probe_filter(extra_ports_enabled())
+            call_bounded(
+                lambda: probe_filter(extra_ports_enabled()),
+                DRIVER_START_TIMEOUT_S,
+                "filter open",
+            )
+        except DriverStartTimeout as e:
+            notify(t("main.driver_timeout", e=e))
+            logger.error("WinDivert filter open timed out: %s", e)
+            os._exit(6)  # fil bloqué dans WinDivertOpen : sortie dure, sentinelle
         except FilterOpenError as e:
             notify(t("main.filter_failed", e=e))
             logger.error("WinDivert filter open failed: %s", e)
             driver.cleanup()
             sys.exit(4)
+        # Le pilote doit être RUNNING (attente bornée), sinon échec explicite.
+        running, state = wait_running(DRIVER_RUNNING_TIMEOUT_S)
+        if not running:
+            notify(
+                t(
+                    "main.driver_not_running",
+                    state=state,
+                    s=round(DRIVER_RUNNING_TIMEOUT_S),
+                )
+            )
+            logger.error("WinDivert service not RUNNING after open: %s", state)
+            driver.cleanup()
+            sys.exit(5)
+        logger.info("WinDivert service state after open: %s", state)
         ctypes.windll.kernel32.SetConsoleTitleW(f"Guardian {__version__}")
     except Exception as e:
         crash_report(e, "Guardian crashed before reaching main()")

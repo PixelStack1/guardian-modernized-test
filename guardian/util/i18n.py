@@ -247,6 +247,18 @@ STRINGS: dict[str, dict[str, str]] = {
         "fr": "Démarrage refusé : échec de la vérification d'intégrité de WinDivert ({e})",
         "en": "Refusing to start: WinDivert integrity check failed ({e})",
     },
+    "main.driver_timeout": {
+        "fr": "Démarrage refusé : le pilote WinDivert ne répond pas ({e}). "
+        "Redémarrez Windows puis relancez Guardian.",
+        "en": "Refusing to start: the WinDivert driver is not responding ({e}). "
+        "Restart Windows, then start Guardian again.",
+    },
+    "main.driver_not_running": {
+        "fr": "Démarrage refusé : le pilote WinDivert n'est pas actif "
+        "(état du service : {state}, attendu RUNNING en {s} s). Arrêt propre.",
+        "en": "Refusing to start: the WinDivert driver is not running "
+        "(service state: {state}, expected RUNNING within {s} s). Exiting cleanly.",
+    },
     "main.filter_failed": {
         "fr": "Impossible d'ouvrir le filtre WinDivert, arrêt propre : {e}",
         "en": "Could not open the WinDivert filter, exiting cleanly: {e}",

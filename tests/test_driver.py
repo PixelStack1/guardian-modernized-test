@@ -141,3 +141,88 @@ def test_multiprocessing_child_streams_never_none():
         "utf-8"
     )
     assert src.index("ensure_child_streams(sys.argv)") < src.index("freeze_support()\n")
+
+
+# -- relance : pilote RUNNING exigé (borné), jamais d'attente silencieuse --------
+def test_wait_running_ok_and_timeout_are_bounded():
+    from util import driver
+
+    states = iter(["STOPPED", "START_PENDING", "RUNNING"])
+    t = [0.0]
+
+    def clock():
+        return t[0]
+
+    def sleep(s):
+        t[0] += s
+
+    assert driver.wait_running(1.0, lambda: next(states), sleep, clock) == (
+        True,
+        "RUNNING",
+    )
+    t[0] = 0.0
+    ok, last = driver.wait_running(1.0, lambda: "STOPPED", sleep, clock)
+    assert (ok, last) == (False, "STOPPED")
+    assert t[0] <= 1.2  # borné
+
+
+def test_call_bounded_times_out_with_clear_error():
+    import threading as th
+
+    from util import driver
+
+    gate = th.Event()
+    with pytest.raises(driver.DriverStartTimeout, match="driver start: not finished"):
+        driver.call_bounded(gate.wait, 0.05, "driver start")
+    gate.set()
+    assert driver.call_bounded(lambda: 7, 1, "x") == 7
+    with pytest.raises(ValueError):
+        driver.call_bounded(lambda: (_ for _ in ()).throw(ValueError("v")), 1, "x")
+
+
+def test_service_state_read_only_and_closes_handles():
+    from util import driver
+
+    closed: list[int] = []
+
+    class Adv:
+        def __init__(self, svc: int, state: int = 4):
+            self.svc, self.state, self.access = svc, state, []
+
+        def OpenSCManagerW(self, a, b, access):
+            self.access.append(access)
+            return 1
+
+        def OpenServiceW(self, scm, name, access):
+            self.access.append(access)
+            return self.svc
+
+        def QueryServiceStatus(self, svc, ptr):
+            ptr._obj[1] = self.state
+            return 1
+
+        def CloseServiceHandle(self, h):
+            closed.append(h)
+            return 1
+
+    a = Adv(2, 4)
+    assert driver.service_state(advapi32=a) == "RUNNING"
+    assert a.access == [0x0001, 0x0004]  # CONNECT + QUERY_STATUS seulement
+    assert closed == [2, 1]
+    assert driver.service_state(advapi32=Adv(2, 1)) == "STOPPED"
+
+
+def test_main_checks_driver_running_and_bounds_start():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "guardian" / "__main__.py").read_text(
+        "utf-8"
+    )
+    assert "call_bounded(lambda: driver.start(), DRIVER_START_TIMEOUT_S" in src
+    assert src.index("probe_filter(extra_ports_enabled())") < src.index(
+        "wait_running(DRIVER_RUNNING_TIMEOUT_S)"
+    )
+    assert "sys.exit(5)" in src
+    # banc CI : pas de boîte modale (attente infinie), message journalisé
+    notify = src[src.index("def notify") : src.index("def ensure_child_streams")]
+    assert notify.index("_ci_probe()") < notify.index("MessageBoxW")
