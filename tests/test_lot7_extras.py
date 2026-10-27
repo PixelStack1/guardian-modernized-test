@@ -484,6 +484,34 @@ def test_r3_commit_data_request_cleanup(monkeypatch):
     app.session_end_cleanup(lambda: (_ for _ in ()).throw(RuntimeError("x")))
 
 
+def test_cancelled_logoff_shows_protection_stopped(gui, monkeypatch):
+    from gui import app
+    from util import i18n
+
+    w, _s, _api = gui
+    calls = []
+    monkeypatch.setattr(ls, "stop_background", lambda: calls.append("session"))
+    pending = []
+    app.on_session_end(
+        lambda: calls.append("driver"),
+        lambda: w,
+        lambda ms, fn: pending.append((ms, fn)),
+    )
+    assert calls == ["session", "driver"]
+    assert w.status.text() != t("gui.protection_stopped")
+    ((ms, fn),) = pending
+    assert ms > 0
+    fn()  # toujours vivant après le délai : déconnexion annulée
+    assert w.status.text() == t("gui.protection_stopped")
+    assert w.status.objectName() == "statusBad"
+    w.refresh()  # le rafraîchissement ne l'efface pas
+    assert w.status.text() == "Protection arrêtée, relance Guardian"
+    assert i18n.STRINGS["gui.protection_stopped"]["en"] == (
+        "Protection stopped, restart Guardian"
+    )
+    app.on_session_end(None, lambda: None, lambda ms, fn: fn())  # pas de fenêtre
+
+
 def test_r4_spoof_note_on_friends_page(gui):
     w, _s, _api = gui
     assert "usurpe" in w.friends.spoof_note.text()

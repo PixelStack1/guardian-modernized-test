@@ -30,6 +30,26 @@ def session_end_cleanup(on_shutdown: Callable[[], Any] | None = None) -> None:
                 logger.exception("nettoyage de fin de session impossible")
 
 
+def on_session_end(
+    on_shutdown: Callable[[], Any] | None,
+    window: Callable[[], Any],
+    later: Callable[[int, Callable[[], Any]], Any],
+    delay_ms: int = 3000,
+) -> None:
+    """commitDataRequest : nettoyage, puis si le processus vit encore après
+    ``delay_ms`` (déconnexion annulée), statut visible « Protection arrêtée »."""
+    session_end_cleanup(on_shutdown)
+
+    def notice() -> None:
+        w = window()
+        if w is not None:
+            with contextlib.suppress(Exception):
+                w.mark_protection_stopped()
+
+    with contextlib.suppress(Exception):
+        later(delay_ms, notice)
+
+
 def close_pyi_splash() -> None:
     """Ferme l'écran de démarrage PyInstaller s'il existe (exe gelé)."""
     with contextlib.suppress(Exception):
@@ -75,7 +95,11 @@ def run_gui(
     # Lot 7 : arrêt propre aussi à la fin de session Windows (aboutToQuit).
     app.aboutToQuit.connect(ls.stop_background)
     if isinstance(app, QGuiApplication):
-        app.commitDataRequest.connect(lambda _m: session_end_cleanup(on_shutdown))
+        from PySide6.QtCore import QTimer
+
+        app.commitDataRequest.connect(
+            lambda _m: on_session_end(on_shutdown, lambda: win, QTimer.singleShot)
+        )
     win = None
     try:
         session = ls.attach_or_start(factory or ls._create_session)

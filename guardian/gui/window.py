@@ -1575,7 +1575,16 @@ class MainWindow(QMainWindow):
         self.status.setObjectName("statusOk" if ok else "statusBad")
         repolish(self.status)
 
+    def mark_protection_stopped(self) -> None:
+        """Fin de session Windows annulée après le nettoyage : la protection est
+        arrêtée (pilote libéré) ; le dire clairement et durablement."""
+        self.protection_stopped = True
+        self.show_status(t("gui.protection_stopped"), False)
+
     def refresh(self) -> None:
+        if getattr(self, "protection_stopped", False):
+            self.show_status(t("gui.protection_stopped"), False)
+            return
         try:
             snap = take_snapshot(self.session)
         except Exception:
