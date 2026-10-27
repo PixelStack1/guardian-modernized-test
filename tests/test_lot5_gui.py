@@ -319,11 +319,15 @@ def test_settings_shield_help_text_fr_en(qtbot, win):
     try:
         win.settings.lang_fr.click()
         fr = win.settings.shield_help.text()
-        assert fr.startswith("Une rafale partant d'un débit bas")
+        assert fr.startswith(
+            "Coupure si la moyenne dépasse le seuil sur le délai choisi ; inondations > 3× coupées plus vite."
+        )
+        assert "Une rafale partant d'un débit bas" in fr
         assert "Rockstar/Take-Two ou Azure" in fr and "~600 paquets/s" in fr
         win.settings.lang_en.click()
         en = win.settings.shield_help.text()
-        assert en.startswith("A burst starting from a low rate")
+        assert en.startswith("Cut off when the average exceeds the threshold")
+        assert "A burst starting from a low rate" in en
         assert "Rockstar/Take-Two or Azure" in en and "~600 packets/s" in en
     finally:
         set_language(before, persist=False)

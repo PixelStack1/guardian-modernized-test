@@ -396,6 +396,49 @@ class GuiActions:
                     bb.seconds = values[RECORDING_KEY]
             return read_settings(data)
 
+    def set_language(self, code: str) -> None:
+        """Langue de l'interface, enregistrée dans la configuration de la session
+        (une seule instance : un réglage enregistré ensuite ne la remet pas à
+        l'ancienne valeur)."""
+        from util.i18n import set_language
+
+        set_language(code, persist=False)
+        s = self.session
+        with s.lock:
+            config = s.config
+            data = getattr(config, "data", None)
+            if isinstance(data, dict):
+                data["language"] = code
+                try:
+                    config.save()
+                except Exception:
+                    logger.debug("sauvegarde de la langue impossible", exc_info=True)
+
+
+# -- Avis de licences tierces (LGPL PySide6) ----------------------------------
+NOTICE_NAME = "THIRD_PARTY_NOTICES.txt"
+
+
+def notice_path() -> Path:
+    """Fichier d'avis : à la racine du dossier de l'exe (``sys._MEIPASS``) une fois
+    gelé, sinon à côté du paquet ``guardian``."""
+    import sys
+
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return Path(base) / NOTICE_NAME
+    return Path(__file__).resolve().parent.parent / NOTICE_NAME
+
+
+def third_party_notice() -> str:
+    try:
+        return notice_path().read_text(encoding="utf-8")
+    except OSError:
+        return (
+            "PySide6 (Qt for Python) — LGPL-3.0 : "
+            "https://www.gnu.org/licenses/lgpl-3.0.html"
+        )
+
 
 # -- Rapports et enregistrements (lecture seule) ------------------------------
 @dataclass(frozen=True)
@@ -449,8 +492,9 @@ def recordings_directory(session: Any) -> Path | None:
     try:
         if d is not None:
             return Path(d() if callable(d) else d)
-        from network.recorder import recordings_dir
+        from util.paths import data_dir
 
-        return recordings_dir()
+        # Même chemin que network.recorder.recordings_dir(), sans mkdir.
+        return data_dir() / "enregistrements"
     except Exception:
         return None

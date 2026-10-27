@@ -1,0 +1,29 @@
+Guardian — avis de licences tierces / third-party notices
+=========================================================
+
+Guardian est distribué sous licence LGPL-3.0 (voir LICENSE).
+Guardian is distributed under the LGPL-3.0 licence (see LICENSE).
+
+Qt for Python — PySide6 (PySide6-Essentials) et shiboken6
+---------------------------------------------------------
+Copyright (C) The Qt Company Ltd. et contributeurs.
+Utilisé sous la licence GNU Lesser General Public License version 3
+(LGPL-3.0). Texte : https://www.gnu.org/licenses/lgpl-3.0.html
+Code source de Qt / PySide6 : https://code.qt.io/ et
+https://download.qt.io/official_releases/QtForPython/
+
+Guardian lie PySide6 dynamiquement : les bibliothèques Qt sont des fichiers
+DLL séparés, extraits dans un dossier temporaire au lancement de l'exécutable.
+Vous pouvez les remplacer par une version modifiée compatible en reconstruisant
+l'exécutable depuis les sources de Guardian (pyproject.toml, guardian/build.py),
+qui sont publiques.
+
+Guardian links PySide6 dynamically: the Qt libraries are separate DLLs
+unpacked to a temporary folder at launch. You may replace them with a modified
+compatible version by rebuilding the executable from Guardian's public sources
+(pyproject.toml, guardian/build.py).
+
+Autres composants / other components
+------------------------------------
+- WinDivert : double licence LGPL-3.0 / GPL-2.0 ; pydivert : LGPL-3.0
+- Données de géolocalisation et plages VPN : voir data-licenses/

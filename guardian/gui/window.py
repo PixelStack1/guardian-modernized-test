@@ -55,6 +55,7 @@ from gui.core import (
     recordings_directory,
     reports_directory,
     take_snapshot,
+    third_party_notice,
 )
 from gui.profiles import PROFILES, apply_profile, current_profile, toggle_emergency
 from gui.widgets import (
@@ -263,6 +264,11 @@ class LivePage(QWidget):
         self.view_rows: list[Row] = []
         self.history: dict[str, deque[float]] = {}
         self._events_seen: list[str] = []
+
+        def run(fn: Callable[[], Any]) -> Callable[[], None]:
+            # Action puis rafraîchissement immédiat (état affiché = état réel).
+            return lambda: win._run(fn)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
@@ -270,27 +276,27 @@ class LivePage(QWidget):
         toggles = QGridLayout()
         toggles.setSpacing(10)
         self.auto = ToggleCard(
-            "Bouclier auto", "Détection de flood", a.toggle_auto, "A"
+            "Bouclier auto", "Détection de flood", run(a.toggle_auto), "A"
         )
         self.total = ToggleCard(
-            "Blocage total", "Coupe tout le trafic", a.toggle_total, "T"
+            "Blocage total", "Coupe tout le trafic", run(a.toggle_total), "T"
         )
         self.lock = ToggleCard(
-            "Verrou de session", "Refuse les nouveaux", a.toggle_lock, "V"
+            "Verrou de session", "Refuse les nouveaux", run(a.toggle_lock), "V"
         )
         self.rec = ToggleCard(
-            "Enregistrement", "Capture post-événement", a.toggle_recording, "E"
+            "Enregistrement", "Capture post-événement", run(a.toggle_recording), "E"
         )
         self.kick = QPushButton("Capturer (K)")
         self.kick.setObjectName("ghost")
         self.kick.setToolTip("Boîte noire : capture des secondes avant/après un kick")
         self.kick.setStyleSheet("padding: 1px 8px; font-size: 10px;")
-        self.kick.clicked.connect(lambda _c=False: a.kick_capture())
+        self.kick.clicked.connect(lambda _c=False: win._run(a.kick_capture))
         self.rec.extra.addWidget(self.kick)
         self.relay = ToggleCard(
             "Relais Rockstar",
             "Services officiels",
-            a.toggle_relay,
+            run(a.toggle_relay),
             "L",
             on_text="BLOQUÉ",
             off_text="AUTORISÉ",
@@ -1201,9 +1207,7 @@ class SettingsPage(QWidget):
         self.win.refresh()
 
     def _lang(self, code: str) -> None:
-        from util.i18n import set_language
-
-        set_language(code)
+        self.win.actions_.set_language(code)
         self.win.refresh()
 
     def update_from(self, snap: Snapshot) -> None:
@@ -1287,6 +1291,7 @@ class MainWindow(QMainWindow):
         hotkey_api: Callable[[], HotkeyApi] | None = None,
         checks: tuple[health.Check, ...] | None = None,
         exe: exehash.ExeHash | None = None,
+        show_text: Callable[[QWidget, str, str], None] | None = None,
     ) -> None:
         super().__init__()
         self.session = session
@@ -1295,6 +1300,7 @@ class MainWindow(QMainWindow):
         self.hotkeys: GlobalHotkeys | None = None
         self.actions_ = GuiActions(session)
         self.ask_text = ask_text or _ask_text
+        self.show_text = show_text or _show_text
         self.setWindowTitle(
             f"Guardian {version} — Pare-feu GTA Online".replace("  ", " ")
         )
@@ -1446,7 +1452,9 @@ class MainWindow(QMainWindow):
         bl = QVBoxLayout(box)
         bl.setContentsMargins(10, 2, 10, 2)
         self.panic = SwitchRow(
-            "Panique (X)", "Seuls les amis passent", self.actions_.toggle_panic
+            "Panique (X)",
+            "Seuls les amis passent",
+            lambda: self._run(self.actions_.toggle_panic),
         )
         self.panic.setToolTip("Raccourci clavier : X")
         bl.addWidget(self.panic)
@@ -1503,7 +1511,25 @@ class MainWindow(QMainWindow):
                 "footerOk",
             )
         )
+        foot.addSpacing(10)
+        self.licences = QPushButton("À propos · licences")
+        self.licences.setObjectName("ghost")
+        self.licences.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.licences.setStyleSheet("padding: 0 6px; font-size: 10px;")
+        self.licences.setFixedHeight(16)
+        self.licences.clicked.connect(lambda _c=False: self.show_about())
+        foot.addWidget(self.licences)
         return box
+
+    def about_text(self) -> str:
+        return (
+            f"{self.windowTitle()}\n"
+            "Licence : LGPL-3.0. Interface : Qt for Python (PySide6) sous LGPL-3.0.\n\n"
+            + third_party_notice()
+        )
+
+    def show_about(self) -> None:
+        self.show_text(self, "À propos · licences", self.about_text())
 
     def _shortcuts(self) -> None:
         a = self.actions_
@@ -1644,3 +1670,19 @@ class _HotkeyBridge(QObject):
     """Signal : le fil des raccourcis globaux -> le fil Qt (connexion en file)."""
 
     fired = Signal(str)
+
+
+def _show_text(parent: QWidget, title: str, text: str) -> None:
+    from PySide6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(title)
+    dlg.resize(640, 480)
+    lay = QVBoxLayout(dlg)
+    view = QPlainTextEdit(text)
+    view.setReadOnly(True)
+    lay.addWidget(view)
+    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+    buttons.rejected.connect(dlg.reject)
+    lay.addWidget(buttons)
+    dlg.exec()
