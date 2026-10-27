@@ -536,7 +536,9 @@ def test_probe_refused_in_console_mode():
 def test_main_pops_inherited_ci_and_owned_env_first():
     src = (ROOT / "guardian" / "__main__.py").read_text("utf-8")
     body = src[src.index('if __name__ == "__main__":') :]
-    assert body.index("pop(cimode.DRY_ENV") < body.index("freeze_support()")
+    assert body.index("freeze_support()") < body.index("pop(cimode.DRY_ENV")
+    assert body.index("freeze_support()") < body.index("pop(OWNED_ENV")
+    assert body.index("pop(cimode.DRY_ENV") < body.index("probe_effective(sys.argv)")
     assert body.index("pop(OWNED_ENV") < body.index("mark_owned(")
 
 
@@ -575,3 +577,104 @@ def test_bench_sniff_is_read_only():
     fn = src[src.index("def sniff_check") : src.index("def spawn_log_path")]
     assert ".send(" not in fn and "src_addr" not in fn and "dst_addr" not in fn
     assert b.SNIFF_WINDOW_S == 10.0
+
+
+_ENV_PROBE_SCRIPT = r"""
+import ctypes, json, multiprocessing, os, runpy, sys
+from unittest import mock
+if sys.platform != "win32" and not hasattr(ctypes, "WinDLL"):
+    ctypes.WinDLL = mock.MagicMock()  # comme tests/conftest.py
+mode, main_py = sys.argv[1], sys.argv[2]
+from util import cimode, driver
+
+def report(stage):
+    print(json.dumps({
+        "stage": stage,
+        "dry_env": os.environ.get(cimode.DRY_ENV),
+        "owned": os.environ.get(driver.OWNED_ENV),
+        "dry": cimode.dry(),
+    }), flush=True)
+    sys.exit(0)
+
+if mode == "child":
+    # Un enfant est aiguillé dans freeze_support (spawn_main) et n'en revient pas.
+    multiprocessing.freeze_support = lambda: report("child")
+    sys.argv = [main_py, "--multiprocessing-fork", "parent_pid=%d" % os.getpid(),
+                "pipe_handle=1"]
+else:
+    # Processus principal : on s'arrête juste après les pop, puis la GUI pose
+    # elle-même le marqueur via mark_owned (env transmis aux enfants).
+    multiprocessing.freeze_support = lambda: None
+    def stop(argv, env=None):
+        driver.mark_owned(mode == "parent-owned")
+        report("parent")
+    cimode.probe_effective = stop
+    sys.argv = [main_py]
+runpy.run_path(main_py, run_name="__main__")
+"""
+
+
+def _run_env_probe(mode, env, tmp_path):
+    import subprocess
+
+    script = tmp_path / "envprobe.py"
+    script.write_text(_ENV_PROBE_SCRIPT, "utf-8")
+    full = {
+        k: v
+        for k, v in os.environ.items()
+        if k
+        not in (
+            *cimode.CI_ENVS,
+            cimode.PROBE_ENV,
+            cimode.DRY_ENV,
+            "GUARDIAN_DRIVER_OWNED",
+        )
+    }
+    full.update(env)
+    paths = [str(ROOT / "guardian")]
+    if importlib.util.find_spec("pydivert") is None:  # comme tests/conftest.py
+        paths.append(str(ROOT / "tests" / "_fakes"))
+    full["PYTHONPATH"] = os.pathsep.join(paths)
+    full["HOME"] = full["LOCALAPPDATA"] = full["APPDATA"] = str(tmp_path)
+    full["XDG_DATA_HOME"] = str(tmp_path)
+    r = subprocess.run(
+        [sys.executable, str(script), mode, str(ROOT / "guardian" / "__main__.py")],
+        capture_output=True,
+        text=True,
+        env=full,
+        timeout=60,
+    )
+    line = [x for x in r.stdout.splitlines() if x.startswith("{")]
+    assert line, r.stdout + r.stderr
+    return json.loads(line[-1])
+
+
+def test_child_argv_keeps_ci_and_owned_env_parent_drops_inherited(tmp_path):
+    ci = {"GUARDIAN_CI_PROBE": "1", "CI": "true"}
+    # 1) Mode CI : l'enfant (--multiprocessing-fork) garde le filtre à blanc.
+    child = _run_env_probe("child", {**ci, "GUARDIAN_CI_DRY": "1"}, tmp_path)
+    assert child["stage"] == "child" and child["dry"] is True
+    assert child["dry_env"] == "1"
+    # 2) Hors CI : valeurs héritées d'AVANT Guardian effacées par le principal,
+    #    donc jamais transmises aux enfants.
+    stale = {"GUARDIAN_CI_DRY": "1", "GUARDIAN_DRIVER_OWNED": "1"}
+    parent = _run_env_probe("parent", stale, tmp_path)
+    assert parent["stage"] == "parent"
+    assert parent["dry_env"] is None and parent["owned"] is None and not parent["dry"]
+    child_env = {
+        k: v
+        for k, v in (
+            ("GUARDIAN_CI_DRY", parent["dry_env"]),
+            ("GUARDIAN_DRIVER_OWNED", parent["owned"]),
+        )
+        if v
+    }
+    child = _run_env_probe("child", child_env, tmp_path)
+    assert child["owned"] is None and child["dry_env"] is None and not child["dry"]
+    # 3) Le principal pose lui-même OWNED=1 (mark_owned, après le pop) : l'enfant le voit.
+    parent = _run_env_probe("parent-owned", stale, tmp_path)
+    assert parent["owned"] == "1" and parent["dry_env"] is None
+    child = _run_env_probe(
+        "child", {"GUARDIAN_DRIVER_OWNED": parent["owned"]}, tmp_path
+    )
+    assert child["owned"] == "1"

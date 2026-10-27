@@ -78,11 +78,6 @@ def notify(text: str, console: bool | None = None) -> None:
 
 
 if __name__ == "__main__":
-    # Audit R1/R3 : processus principal, jamais d'état CI/pilote hérité de l'extérieur.
-    import os as _os
-
-    _os.environ.pop(cimode.DRY_ENV, None)
-    _os.environ.pop(OWNED_ENV, None)
     # Lot 8 : un enfant multiprocessing quitte si la GUI qui l'a lancé est tuée.
     with contextlib.suppress(Exception):
         from util import parentwatch as _pw
@@ -90,6 +85,13 @@ if __name__ == "__main__":
 
         _pw.watch_spawn_parent(sys.argv, on_parent_exit=_orphan)
     freeze_support()
+    # Audit R1/R3 : APRÈS freeze_support (un enfant multiprocessing y est aiguillé et
+    # n'atteint jamais ce point : il garde l'état transmis par la GUI). Le processus
+    # principal n'hérite jamais d'un état CI/pilote venu de l'extérieur.
+    import os as _os
+
+    _os.environ.pop(cimode.DRY_ENV, None)
+    _os.environ.pop(OWNED_ENV, None)
     # Lot 8 : banc d'acceptation CI uniquement (inerte sans --ci-probe).
     CI_PROBE = cimode.probe_effective(sys.argv)
     if CI_PROBE is None and cimode.probe_path(sys.argv) is not None:
