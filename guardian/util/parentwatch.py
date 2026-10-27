@@ -175,7 +175,12 @@ def watch_spawn_parent(
 def ci_diag(line: str) -> None:
     """Trace de diagnostic, écrite UNIQUEMENT en mode sonde CI (GUARDIAN_CI_DRY=1,
     hérité des enfants) dans %LOCALAPPDATA%\\Guardian\\ci-spawn.log. Inerte sinon."""
-    if os.environ.get("GUARDIAN_CI_DRY") != "1":
+    try:
+        from util import cimode
+
+        if not cimode.dry():  # DRY_ENV=1 ET contexte CI autorisé
+            return
+    except Exception:
         return
     with contextlib.suppress(Exception):
         import time

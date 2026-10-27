@@ -11,7 +11,7 @@ from network.sessions import FilterOpenError, extra_ports_enabled, probe_filter
 from util import cimode
 from util.console import attach_console
 from util.crash import crash_report
-from util.driver import DriverLifecycle, mark_owned
+from util.driver import OWNED_ENV, DriverLifecycle, mark_owned
 from util.i18n import t
 from util.integrity import IntegrityError, secure_windivert
 from util.paths import data_file
@@ -78,6 +78,11 @@ def notify(text: str, console: bool | None = None) -> None:
 
 
 if __name__ == "__main__":
+    # Audit R1/R3 : processus principal, jamais d'état CI/pilote hérité de l'extérieur.
+    import os as _os
+
+    _os.environ.pop(cimode.DRY_ENV, None)
+    _os.environ.pop(OWNED_ENV, None)
     # Lot 8 : un enfant multiprocessing quitte si la GUI qui l'a lancé est tuée.
     with contextlib.suppress(Exception):
         from util import parentwatch as _pw
@@ -86,12 +91,12 @@ if __name__ == "__main__":
         _pw.watch_spawn_parent(sys.argv, on_parent_exit=_orphan)
     freeze_support()
     # Lot 8 : banc d'acceptation CI uniquement (inerte sans --ci-probe).
-    CI_PROBE = cimode.probe_path(sys.argv)
-    if CI_PROBE is not None and not cimode.probe_allowed():
+    CI_PROBE = cimode.probe_effective(sys.argv)
+    if CI_PROBE is None and cimode.probe_path(sys.argv) is not None:
         logger.warning(
-            "--ci-probe ignored (needs GUARDIAN_CI_PROBE=1 and CI=true): normal protection"
+            "--ci-probe ignored (GUI only, needs GUARDIAN_CI_PROBE=1 and CI=true):"
+            " normal protection"
         )
-        CI_PROBE = None
     if CI_PROBE is not None:
         cimode.enable_dry()
         logger.warning("CI acceptance probe: dry filter, state -> %s", CI_PROBE)

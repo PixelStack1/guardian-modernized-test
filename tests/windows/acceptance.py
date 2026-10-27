@@ -638,6 +638,50 @@ def azerty_altgr(
     rep.check(name, len(fired()) == n0 and st() == s0, detail)
 
 
+SNIFF_FILTER = "udp or tcp"
+SNIFF_WINDOW_S = 10.0
+
+
+def sniff_flags() -> int:
+    """SNIFF (copie, rien n'est détourné ni bloqué) | RECV_ONLY (aucun envoi
+    possible) | NO_INSTALL (pilote déjà chargé par Guardian : on n'installe rien)."""
+    from pydivert import Flag
+
+    return int(Flag.SNIFF | Flag.RECV_ONLY | Flag.NO_INSTALL)
+
+
+def sniff_check(rep: Report) -> None:  # pragma: no cover - Windows
+    """Pilote réellement fonctionnel : au moins 1 paquet vu en lecture seule.
+    Seul un COMPTEUR est gardé (aucune adresse, aucun contenu). Non bloquant."""
+    name = "relaunch: driver sees traffic (SNIFF|RECV_ONLY, read-only)"
+    seen, err = 0, ""
+    try:
+        import pydivert
+
+        w = pydivert.WinDivert(SNIFF_FILTER, flags=pydivert.Flag(sniff_flags()))
+        w.open()
+        try:
+            end = time.time() + SNIFF_WINDOW_S
+            while time.time() < end and not seen:
+                try:
+                    w.recv(timeout=1.0)
+                    seen += 1  # métadonnée : un paquet copié ; jamais renvoyé
+                except Exception as e:  # délai écoulé sans paquet
+                    err = type(e).__name__
+        finally:
+            w.close()
+    except Exception as e:
+        err = f"open failed: {type(e).__name__}"
+    rep.metrics["relaunch_sniff_packets"] = seen
+    detail = f"packets={seen} in <= {SNIFF_WINDOW_S:.0f} s, filter '{SNIFF_FILTER}'"
+    rep.reserve(
+        name,
+        seen > 0,
+        detail + (f" ({err})" if err and not seen else ""),
+        "no packet seen by read-only handle",
+    )
+
+
 def spawn_log_path() -> Path:
     base = os.environ.get("LOCALAPPDATA") or str(Path.home())
     return Path(base) / "Guardian" / "ci-spawn.log"
@@ -718,6 +762,7 @@ def relaunch_after_kill(
             and not hk.get("failed"),
             json.dumps(hk),
         )
+        sniff_check(rep)  # handle fermé AVANT WM_CLOSE : n'empêche pas le retrait
         win.post(run.hwnd, run.child, WM_CLOSE)
         ok, ms = wait_until(run.gone, threshold("EXIT_MS"), 0.1)
         rep.metrics["relaunch_wm_close_exit_ms"] = round(ms)

@@ -1260,6 +1260,8 @@ class NavButton(QPushButton):
 
 
 class MainWindow(QMainWindow):
+    """Fenêtre Guardian. ``session`` : BackgroundSession déjà démarrée."""
+
     ci_banner: QLabel | None = None
 
     def show_ci_banner(self) -> None:
@@ -1275,8 +1277,6 @@ class MainWindow(QMainWindow):
         )
         self._col.insertWidget(0, b)
         self.ci_banner = b
-
-    """Fenêtre Guardian. ``session`` : BackgroundSession déjà démarrée."""
 
     # Ordre et icônes de la maquette ; « Amis » en plus, sous la liste.
     PAGES = [

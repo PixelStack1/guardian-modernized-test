@@ -54,7 +54,21 @@ def enable_dry() -> None:
 
 
 def dry() -> bool:
-    return os.environ.get(DRY_ENV) == "1"
+    """Filtre à blanc : DRY_ENV seul ne suffit pas, le contexte CI autorisé est exigé."""
+    return os.environ.get(DRY_ENV) == "1" and probe_allowed()
+
+
+def probe_effective(
+    argv: list[str], env: Mapping[str, str] | None = None
+) -> Path | None:
+    """Sonde réellement active : drapeau présent, contexte CI autorisé et mode GUI
+    uniquement (refusée en ``--console`` / ``--self-test-exit``)."""
+    path = probe_path(argv)
+    if path is None or not probe_allowed(env):
+        return None
+    if "--console" in argv or "--self-test-exit" in argv:
+        return None
+    return path
 
 
 # Jalons de démarrage (horodatages, aucune donnée réseau) : relevés toujours (coût

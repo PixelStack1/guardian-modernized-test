@@ -111,3 +111,19 @@ WinDivertShutdown) avant la fermeture, ou recv avec timeout.
 - La sonde note les jalons `process_start`, `python_start`, `imports_done`,
   `driver_loaded`, `startup_window`, `qt_app_created`, `menu_imported`,
   `window_shown`, `main_ready` ; le banc les affiche en ms depuis le lancement.
+
+### Audit (lot 8)
+
+- R1 : `cimode.dry()` exige `GUARDIAN_CI_DRY=1` **et** `probe_allowed()` ; idem pour
+  `parentwatch.ci_diag`. Le processus principal efface `GUARDIAN_CI_DRY` hérité.
+- R2 : `orphan_cleanup` idempotent (handles retirés sous verrou : un seul `close()`
+  même avec des appels concurrents).
+- R3 : `GUARDIAN_DRIVER_OWNED` hérité effacé en tête du processus principal, avant
+  d'être reposé après le chargement.
+- R4 : `--ci-probe` refusé hors GUI (`--console`, `--self-test-exit`).
+- Chaque variable seule (`GUARDIAN_CI_DRY`, `GUARDIAN_DRIVER_OWNED`,
+  `GUARDIAN_CI_PROBE`) sans CI => vrai filtre (test unitaire).
+- Relance : handle de contrôle `SNIFF | RECV_ONLY | NO_INSTALL`, filtre
+  `udp or tcp`, 10 s, compteur seulement (aucune adresse, aucun envoi), fermé avant
+  WM_CLOSE ; 0 paquet => WARN.
+- Lot 9 (non fait) : TerminateProcess après le join du nettoyage borné.

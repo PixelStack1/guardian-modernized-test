@@ -213,8 +213,9 @@ def orphan_cleanup(windivert: Any = None) -> list[str]:
     import os
 
     steps: list[str] = []
-    with _handles_lock:
+    with _handles_lock:  # idempotent : un seul appel concurrent ferme chaque handle
         handles = list(_open_handles.values())
+        _open_handles.clear()
     for h in handles:
         r = cancel_pending_io(h)
         if r != "cancel:none":

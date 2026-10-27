@@ -39,6 +39,8 @@ def test_probe_flag_parsing_is_inert_without_flag():
 
 
 def test_dry_filter_only_when_enabled(monkeypatch):
+    monkeypatch.setenv(cimode.PROBE_ENV, "1")
+    monkeypatch.setenv("CI", "true")
     monkeypatch.setenv(cimode.DRY_ENV, "0")  # restauré (absent) en fin de test
     assert not cimode.dry()
     assert sessions.packet_filter(True) == sessions.PACKET_FILTER
@@ -166,7 +168,7 @@ def test_probe_allowed_only_with_ci_env():
     assert not cimode.probe_allowed({"GUARDIAN_CI_PROBE": "0", "CI": "true"})
     assert not cimode.probe_allowed({"GUARDIAN_CI_PROBE": "1", "CI": "false"})
     src = (ROOT / "guardian" / "__main__.py").read_text("utf-8")
-    assert src.index("probe_allowed()") < src.index("cimode.enable_dry()")
+    assert src.index("probe_effective(sys.argv)") < src.index("cimode.enable_dry()")
 
 
 def test_probe_json_keys_whitelist_and_no_ip(win, tmp_path):
@@ -291,6 +293,9 @@ def test_orphan_cleanup_closes_handles_then_unregisters_if_owned(monkeypatch):
     drv.mark_owned(False)
     assert os.environ[drv.OWNED_ENV] == "0"
     drv.mark_owned(True)
+    assert drv.orphan_cleanup(WD) == ["unregister"]  # idempotent : déjà fermés
+    log.clear()
+    drv.track_handle(H(2))
     assert drv.orphan_cleanup(WD) == ["close", "unregister"]
     assert log == ["close2", "unregister"]  # fermer AVANT de désenregistrer
 
@@ -299,6 +304,7 @@ def test_orphan_cleanup_closes_handles_then_unregisters_if_owned(monkeypatch):
         def unregister():
             raise OSError("in use")
 
+    drv.track_handle(H(3))
     assert drv.orphan_cleanup(Boom) == ["close"]  # jamais d'exception
 
 
@@ -367,6 +373,8 @@ def test_ci_diag_only_in_probe_mode_and_spawn_logged(monkeypatch, tmp_path):
     from util import parentwatch
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv(cimode.PROBE_ENV, "1")
+    monkeypatch.setenv("CI", "true")
     monkeypatch.setenv(cimode.DRY_ENV, "0")
     parentwatch.log_spawn("live capture", 12)
     assert not (tmp_path / "Guardian" / "ci-spawn.log").exists()  # inerte
@@ -485,3 +493,85 @@ def test_startup_marks_recorded_and_inert(monkeypatch):
     assert (
         'cimode.mark("driver_loaded")' in main and 'cimode.mark("imports_done")' in main
     )
+
+
+@pytest.mark.parametrize(
+    "var", ["GUARDIAN_CI_DRY", "GUARDIAN_DRIVER_OWNED", "GUARDIAN_CI_PROBE"]
+)
+def test_each_env_var_alone_without_ci_keeps_real_filter(monkeypatch, tmp_path, var):
+    from util import parentwatch
+
+    for k in (
+        *cimode.CI_ENVS,
+        cimode.PROBE_ENV,
+        cimode.DRY_ENV,
+        "GUARDIAN_DRIVER_OWNED",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv(var, "1")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert not cimode.dry()
+    assert sessions.packet_filter(True) == sessions.PACKET_FILTER
+    assert sessions.packet_filter(False) == sessions.PACKET_FILTER_6672_ONLY
+    assert cimode.probe_effective(["g", "--ci-probe", "p.json"]) is None
+    parentwatch.ci_diag("x")
+    assert not (tmp_path / "Guardian" / "ci-spawn.log").exists()
+
+
+def test_probe_refused_in_console_mode():
+    ok = {"GUARDIAN_CI_PROBE": "1", "CI": "true"}
+    assert cimode.probe_effective(["g", "--ci-probe", "p.json"], ok) == Path("p.json")
+    assert (
+        cimode.probe_effective(["g", "--console", "--ci-probe", "p.json"], ok) is None
+    )
+    assert (
+        cimode.probe_effective(["g", "--ci-probe", "p.json", "--console"], ok) is None
+    )
+    assert (
+        cimode.probe_effective(["g", "--self-test-exit", "--ci-probe", "p.json"], ok)
+        is None
+    )
+
+
+def test_main_pops_inherited_ci_and_owned_env_first():
+    src = (ROOT / "guardian" / "__main__.py").read_text("utf-8")
+    body = src[src.index('if __name__ == "__main__":') :]
+    assert body.index("pop(cimode.DRY_ENV") < body.index("freeze_support()")
+    assert body.index("pop(OWNED_ENV") < body.index("mark_owned(")
+
+
+def test_orphan_cleanup_idempotent_under_concurrency(monkeypatch):
+    import threading
+
+    from util import driver as d
+
+    monkeypatch.delenv(d.OWNED_ENV, raising=False)
+    closes = []
+
+    class H:
+        def close(self):
+            closes.append(1)
+
+    monkeypatch.setattr(d, "_open_handles", {})
+    d.track_handle(H())
+    barrier = threading.Barrier(4)
+
+    def go():
+        barrier.wait()
+        d.orphan_cleanup()
+
+    ts = [threading.Thread(target=go) for _ in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(5)
+    assert closes == [1]
+
+
+def test_bench_sniff_is_read_only():
+    b = load_bench()
+    src = (ROOT / "tests" / "windows" / "acceptance.py").read_text("utf-8")
+    assert "Flag.SNIFF | Flag.RECV_ONLY | Flag.NO_INSTALL" in src
+    fn = src[src.index("def sniff_check") : src.index("def spawn_log_path")]
+    assert ".send(" not in fn and "src_addr" not in fn and "dst_addr" not in fn
+    assert b.SNIFF_WINDOW_S == 10.0
