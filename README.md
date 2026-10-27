@@ -51,6 +51,12 @@ sends packets.
   size. Abnormal bursts turn the row **orange** (unusual) then **red** (suspicious). ON/off
   states are shown in green/red.
 - **Auto shield** (off by default, `A`): blocks red-level IPs only, for **7 days**. `D` unblocks.
+  Absolute rate rule (`shield_pps` default 80, `shield_seconds` default 5, in `data.json`): an IP turns
+  red when it averages more than `shield_pps` pkt/s over `shield_seconds` (**more than 400 packets in
+  5 s** by default), at least 4 of the last 5 one-second slices are above half the limit, and the IP
+  has been seen for at least `shield_seconds`. A short dip does not reset the count. The cut usually
+  lands **5 s after the burst starts**, or **between 4.5 and 5 s** if the player was already sending
+  at a high rate before. Friends, the whitelist, Rockstar/Take-Two and Azure are never cut.
 - **Total block** (off by default, `T`): when an IP is blocked, also cuts **outgoing** traffic to
   it for **10 minutes**. ⚠️ **Not a guaranteed kick**; if that player is host, you may be the one
   who leaves.
@@ -272,6 +278,20 @@ pas l'hôte** (l'hôte ne change que s'il quitte la session).
   (filtre appliqué aussi au chargement du fichier). Si les plages Rockstar/Azure n'ont pas pu être
   chargées, le bouclier auto reste désactivé et les entrées du fichier ne sont pas appliquées.
   Les IP orange ne sont jamais bloquées automatiquement.
+- **Règle de débit absolue du bouclier** (en plus de la règle x5, s'applique aussi pendant
+  l'apprentissage), réglable dans `data.json` : `shield_pps` (défaut 80, borné 20–1000) et
+  `shield_seconds` (défaut 5, borné 1–60). Une IP passe au rouge, et est donc coupée si le bouclier
+  auto est actif, quand **les trois** conditions sont réunies :
+  - plus de `shield_pps` paquets/s **en moyenne** sur les `shield_seconds` dernières secondes
+    (par défaut **plus de 400 paquets en 5 s**) ;
+  - au moins 4 tranches d'1 s sur 5 (N-1 sur N) au-dessus de la moitié du seuil (plus de 40
+    paquets par défaut) : une rafale brève suivie d'un silence ne suffit pas ;
+  - l'IP est vue depuis au moins `shield_seconds`.
+
+  Une petite baisse ponctuelle ne remet pas le compteur à zéro. En général la coupure tombe
+  **5 s après le début de la rafale**, et entre **4,5 et 5 s** si le joueur avait déjà un débit élevé
+  avant (par exemple, de 70 à 81 paquets/s : coupure à environ 4,7 s). Jamais pour les amis, la liste
+  blanche, Rockstar/Take-Two ou Azure.
 - **Bouclier manuel** (`B`) : bloque n'importe quelle IP choisie et l'écrit **de façon permanente**
   dans la liste noire de `data.json` (avec date et pseudo) ; `D` pour débloquer (retire aussi
   l'IP de la liste noire, ou de `auto_block.json` pour un blocage auto).
