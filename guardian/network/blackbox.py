@@ -60,6 +60,7 @@ MAX_FILES = 20
 MAX_PENDING = 8
 # Un même motif automatique ne déclenche pas plus d'une capture par période.
 AUTO_COOLDOWN = 60.0
+STALE_TMP_SECONDS = 60.0
 CONFIG_KEY = "recording_seconds"
 PREFIX = "kick-"
 
@@ -352,6 +353,14 @@ def rotate(directory: Path, max_files: int) -> list[Path]:
         directory.glob(f"{PREFIX}*.csv"), key=lambda p: (p.stat().st_mtime, p.name)
     )
     removed = files[: max(0, len(files) - max_files)]
+    # Lot 3 (F5) : restes .tmp-*.csv d'une écriture interrompue (plus vieux que
+    # STALE_TMP_SECONDS, pour ne jamais toucher une écriture en cours).
+    limit = time.time() - STALE_TMP_SECONDS
+    for tmp in directory.glob(".tmp-*.csv"):
+        with contextlib.suppress(OSError):
+            if tmp.stat().st_mtime < limit:
+                tmp.unlink()
+                removed.append(tmp)
     for path in removed:
         with contextlib.suppress(OSError):
             path.unlink()

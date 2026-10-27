@@ -99,6 +99,7 @@ class ReplayResult:
     dropped_panic: Counter[str] = field(default_factory=Counter)
     offender_alerts: list[str] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
+    flags: list[tuple[str, str]] = field(default_factory=list)  # (clé, ip), lot 3
 
 
 def replay(
@@ -112,6 +113,9 @@ def replay(
     offender_drop: bool = True,
     friends: dict[str, str] | None = None,
     panic_after: float | None = None,
+    filters: bool = False,
+    vpn_block: bool = False,
+    settings: dict[str, Any] | None = None,
 ) -> ReplayResult:
     """Rejoue ``rows`` ; ``emit`` reçoit chaque ligne de décision.
 
@@ -119,7 +123,10 @@ def replay(
     premier paquet (None = jamais). ``offenders`` : IP récidivistes connues au départ
     (mémoire seule, aucun fichier lu ni écrit) ; les IP bloquées pendant le rejeu le
     deviennent aussi. ``offender_drop`` : coupure immédiate. ``friends`` : ip -> pseudo
-    (toujours autorisés). ``panic_after`` : bouton panique activé après N secondes."""
+    (toujours autorisés). ``panic_after`` : bouton panique activé après N secondes.
+    ``filters`` : filtres du lot 3 (pays, ping estimé, débit, VPN) en signalement ;
+    ``vpn_block`` : blocage auto des VPN (jamais pays de confiance/amis/Rockstar) ;
+    ``settings`` : réglages façon data.json (trusted_countries, rate_limit_pps...)."""
     relay_block = is_block(relay_mode)
     now_box = [0.0]
 
@@ -139,6 +146,11 @@ def replay(
         offender_drop=offender_drop,
         sound=lambda: None,  # aucun son en rejeu
         friends=dict(friends or {}),
+        filters=ls.make_filters(
+            {**(settings or {}), "vpn_auto_block": vpn_block} if filters else {}
+        )
+        if filters
+        else None,
     )
     assert ctrl.offenders is not None
     for ip in offenders:
@@ -186,6 +198,12 @@ def replay(
         if alert:
             res.new_players.append(ip)
             ctrl.events.append(alert)
+        if ctrl.filters is not None and not ctrl.is_friend(ip):
+            for key, kw in ctrl.filters.observe(ts, ip, inbound):
+                res.flags.append((key, ip))
+                ctrl.events.append(t(key, **kw))
+            if inbound and ctrl.filters.wants_vpn_block(ip):
+                ctrl.vpn_block(ip)
         if inbound:
             monitor.add_packet(ip, size, ts)
         if next_eval is None or ts >= next_eval:
@@ -282,6 +300,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="SECONDES",
         help="active le bouton panique SECONDES après le premier paquet",
     )
+    parser.add_argument(
+        "--filtres",
+        action="store_true",
+        help="lot 3 : signale pays hors confiance, ping estimé, débit, VPN",
+    )
+    parser.add_argument(
+        "--vpn-blocage",
+        action="store_true",
+        help="lot 3 : avec --filtres, bloque automatiquement les VPN (7 j, mémoire)",
+    )
     parser.add_argument("--lang", choices=LANGUAGES, default="fr")
     parser.add_argument(
         "--journal", type=Path, help="dossier où écrire joueurs.log (sinon : rien)"
@@ -306,6 +334,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                 ),
                 panic_after=args.panique,
+                filters=args.filtres,
+                vpn_block=args.vpn_blocage,
             )
     except (OSError, ValueError) as e:
         print(f"erreur : {e}", file=sys.stderr)

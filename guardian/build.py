@@ -23,6 +23,11 @@ def build() -> None:
             os.path.abspath(os.path.join("guardian", "util", "geoip_ipv4.bin.gz"))
             + os.pathsep
             + "util",
+            # Plages VPN/hébergeurs hors ligne (util/vpn.py, lot 3).
+            "--add-data",
+            os.path.abspath(os.path.join("guardian", "util", "vpn_ipv4.bin.gz"))
+            + os.pathsep
+            + "util",
             "--specpath",
             "spec",
         )
