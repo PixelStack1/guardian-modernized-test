@@ -504,6 +504,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "fr": "Protection arrêtée, relance Guardian",
         "en": "Protection stopped, restart Guardian",
     },
+    "gui.about_title": {"fr": "À propos · licences", "en": "About · licences"},
     "live.ev.friend_refused": {
         "fr": "Blocage refusé : {ip} est dans la liste d'amis",
         "en": "Block refused: {ip} is on the friend list",

@@ -1512,7 +1512,7 @@ class MainWindow(QMainWindow):
             )
         )
         foot.addSpacing(10)
-        self.licences = QPushButton("À propos · licences")
+        self.licences = QPushButton(t("gui.about_title"))
         self.licences.setObjectName("ghost")
         self.licences.setCursor(Qt.CursorShape.PointingHandCursor)
         self.licences.setStyleSheet("padding: 0 6px; font-size: 10px;")
@@ -1529,7 +1529,7 @@ class MainWindow(QMainWindow):
         )
 
     def show_about(self) -> None:
-        self.show_text(self, "À propos · licences", self.about_text())
+        self.show_text(self, t("gui.about_title"), self.about_text())
 
     def _shortcuts(self) -> None:
         a = self.actions_

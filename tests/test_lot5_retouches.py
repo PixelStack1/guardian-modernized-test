@@ -431,3 +431,17 @@ def test_notice_contains_full_lgpl_and_gpl_text():
     assert "6. Revised Versions of the GNU Lesser General Public License." in text
     assert "GNU GENERAL PUBLIC LICENSE" in text
     assert "END OF TERMS AND CONDITIONS" in text
+
+
+def test_about_title_is_translated():
+    from util import i18n
+
+    assert i18n.STRINGS["gui.about_title"] == {
+        "fr": "À propos · licences",
+        "en": "About · licences",
+    }
+    src = (
+        Path(__file__).resolve().parents[1] / "guardian" / "gui" / "window.py"
+    ).read_text("utf-8")
+    assert '"À propos · licences"' not in src
+    assert src.count('t("gui.about_title")') == 2
