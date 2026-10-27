@@ -114,6 +114,10 @@ if __name__ == "__main__":
             logger.error("WinDivert integrity check failed: %s", e)
             sys.exit(3)
         logger.info("WinDivert binaries verified: %s", hashes)
+        # Lot 8 : nos enfants meurent avec nous (même taskkill /F). Avant tout spawn.
+        from util import jobobject
+
+        jobobject.kill_children_with_me()
         driver = DriverLifecycle(pydivert.WinDivert)
         driver.start()
         mark_owned(driver.loaded_by_guardian)  # pour le nettoyage par les workers

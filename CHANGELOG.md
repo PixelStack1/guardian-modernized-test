@@ -4,6 +4,7 @@
 ## Lot 8 — banc d'acceptation Windows en CI
 - Durcissement : `--ci-probe` exige `GUARDIAN_CI_PROBE=1` + `CI=true` ; bandeau rouge « MODE TEST CI » ; banc limité au HWND/thread du PID de Guardian ; liste blanche des clés de la sonde.
 - Workers de capture : chien de garde du PID lanceur (argv `parent_pid`) dès le démarrage ; si la GUI est tuée (`taskkill /F`), chaque worker ferme ses handles WinDivert (fail-open) puis désenregistre le pilote si Guardian l'avait chargé (constaté par le banc CI : pilote resté RUNNING, bootloader bloqué).
+- Job Object `KILL_ON_JOB_CLOSE` : le processus Guardian (pas le bootloader) s'y place à l'init ; tous ses enfants meurent avec lui, même après `taskkill /F`. Fail-open (erreur journalisée). PID + rôle de chaque enfant journalisés.
 
 - `--ci-probe <json>` (test uniquement, inerte sinon) : filtre WinDivert à blanc
   `false` (aucun paquet capturé ni renvoyé) et état de la GUI écrit en JSON.

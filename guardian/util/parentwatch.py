@@ -11,6 +11,7 @@ cleanup (pre-cleanup, children, driver unregister) and exits.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sys
@@ -186,6 +187,12 @@ def watched_manager() -> Any:
 
     manager = SyncManager()
     manager.start(initializer=arm_in_child)
+    with contextlib.suppress(Exception):
+        from util.jobobject import log_spawn
+
+        log_spawn(
+            "Manager server", getattr(getattr(manager, "_process", None), "pid", "?")
+        )
     return manager
 
 

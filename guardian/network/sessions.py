@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import pydivert
 
 from network.sessioninfo import SessionInfo
-from util import parentwatch
+from util import jobobject, parentwatch
 from util.console import get_original_console_title, set_console_title
 from util.driver import orphan_cleanup, track_handle, untrack_handle
 from util.dynamicblacklist import T2_EU_FALLBACK, T2_US_FALLBACK
@@ -248,6 +248,7 @@ class AbstractPacketFilter(ABC):
 
     def start(self) -> None:
         self.process.start()
+        jobobject.log_spawn(type(self).__name__, getattr(self.process, "pid", "?"))
         logger.info("Dispatched %s blocker process", self.__class__.__name__)
         set_console_title(f"{get_original_console_title()} - {self.__class__.__name__}")
 
@@ -514,6 +515,7 @@ class DebugSession:
 
     def start(self) -> None:
         self.process.start()
+        jobobject.log_spawn(type(self).__name__, getattr(self.process, "pid", "?"))
 
     def stop(self) -> None:
         self.process.terminate()
@@ -628,6 +630,7 @@ class IPCollector:
 
     def start(self) -> None:
         self.process.start()
+        jobobject.log_spawn(type(self).__name__, getattr(self.process, "pid", "?"))
         logger.info("Dispatched IPCollector process")
 
     def stop(self) -> None:
