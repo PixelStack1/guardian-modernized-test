@@ -248,6 +248,7 @@ class AbstractPacketFilter(ABC):
 
     def start(self) -> None:
         self.process.start()
+        parentwatch.log_spawn(type(self).__name__, getattr(self.process, "pid", "?"))
         logger.info("Dispatched %s blocker process", self.__class__.__name__)
         set_console_title(f"{get_original_console_title()} - {self.__class__.__name__}")
 
@@ -514,6 +515,7 @@ class DebugSession:
 
     def start(self) -> None:
         self.process.start()
+        parentwatch.log_spawn(type(self).__name__, getattr(self.process, "pid", "?"))
 
     def stop(self) -> None:
         self.process.terminate()
@@ -628,6 +630,7 @@ class IPCollector:
 
     def start(self) -> None:
         self.process.start()
+        parentwatch.log_spawn(type(self).__name__, getattr(self.process, "pid", "?"))
         logger.info("Dispatched IPCollector process")
 
     def stop(self) -> None:

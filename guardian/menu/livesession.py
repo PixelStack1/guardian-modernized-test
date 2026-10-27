@@ -1642,6 +1642,7 @@ class BackgroundSession:
             return
         self.started = True
         self.proc.start()
+        parentwatch.log_spawn("live capture", getattr(self.proc, "pid", "?"))
         self._thread.start()
 
     def alive(self) -> bool:

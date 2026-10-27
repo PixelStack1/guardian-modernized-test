@@ -11,6 +11,7 @@ cleanup (pre-cleanup, children, driver unregister) and exits.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sys
@@ -170,11 +171,65 @@ def watch_spawn_parent(
     return True
 
 
-def arm_in_child() -> None:
-    """Initialiseur des serveurs Manager : quitter si le lanceur (GUI) disparaît.
-    (En onefile, le hook PyInstaller lance les enfants avant le script principal :
-    le serveur Manager n'ouvre pas WinDivert, il faut donc l'armer ici.)"""
+def ci_diag(line: str) -> None:
+    """Trace de diagnostic, écrite UNIQUEMENT en mode sonde CI (GUARDIAN_CI_DRY=1,
+    hérité des enfants) dans %LOCALAPPDATA%\\Guardian\\ci-spawn.log. Inerte sinon."""
+    if os.environ.get("GUARDIAN_CI_DRY") != "1":
+        return
+    with contextlib.suppress(Exception):
+        import time
+
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        path = os.path.join(base, "Guardian", "ci-spawn.log")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{time.time():.3f} pid={os.getpid()} {line}\n")
+
+
+def log_spawn(purpose: str, pid: Any) -> None:
+    """PID + rôle de chaque enfant lancé (journal + diagnostic CI)."""
+    logging.getLogger(__name__).info("spawned child pid=%s purpose=%s", pid, purpose)
+    ci_diag(f"spawned child pid={pid} purpose={purpose}")
+
+
+def arm_with_pid(gui_pid: int, purpose: str = "child") -> None:
+    """Entrée d'un enfant (initialiseur Manager / début de cible Process) : fil
+    dédié qui attend la fin du processus ``gui_pid`` (OpenProcess SYNCHRONIZE +
+    WaitForSingleObject INFINITE) puis ``os._exit(0)``. Indépendant des autres
+    armements ; fail-open (aucun effet si l'ouverture échoue)."""
+    ci_diag(f"arm purpose={purpose} gui_pid={gui_pid}")
+    if sys.platform != "win32" or not gui_pid:
+        return
     try:
+        import ctypes
+        from ctypes import wintypes as wt
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wt.HANDLE
+        k32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+        k32.WaitForSingleObject.argtypes = [wt.HANDLE, wt.DWORD]
+        k32.WaitForSingleObject.restype = wt.DWORD
+        h = k32.OpenProcess(SYNCHRONIZE, False, gui_pid)
+        if not h:
+            ci_diag(f"arm failed OpenProcess err={ctypes.get_last_error()}")
+            return
+    except Exception as e:
+        ci_diag(f"arm failed {e!r}")
+        return
+
+    def wait_then_exit() -> None:
+        r = k32.WaitForSingleObject(h, 0xFFFFFFFF)
+        ci_diag(f"gui gone (wait={r}) -> exit purpose={purpose}")
+        os._exit(0)
+
+    threading.Thread(target=wait_then_exit, name="gui-watch", daemon=True).start()
+    ci_diag(f"armed purpose={purpose}")
+
+
+def arm_in_child(gui_pid: int = 0) -> None:
+    """Initialiseur des serveurs Manager (point d'entrée réel du serveur)."""
+    try:
+        arm_with_pid(gui_pid, "Manager server")
         watch_worker_parent()
     except Exception:
         logging.getLogger("debugger").exception("manager parent watchdog failed")
@@ -185,7 +240,8 @@ def watched_manager() -> Any:
     from multiprocessing.managers import SyncManager
 
     manager = SyncManager()
-    manager.start(initializer=arm_in_child)
+    manager.start(initializer=arm_in_child, initargs=(os.getpid(),))
+    log_spawn("Manager server", getattr(getattr(manager, "_process", None), "pid", "?"))
     return manager
 
 

@@ -336,13 +336,16 @@ def test_managers_are_watched_and_die_with_gui(monkeypatch):
 
     calls = []
     monkeypatch.setattr(parentwatch, "watch_worker_parent", lambda: calls.append(1))
-    parentwatch.arm_in_child()
-    assert calls == [1]
+    monkeypatch.setattr(
+        parentwatch, "arm_with_pid", lambda pid, purpose: calls.append((pid, purpose))
+    )
+    parentwatch.arm_in_child(4242)
+    assert calls == [(4242, "Manager server"), 1]
     for rel in ("menu/livesession.py", "network/sessions.py"):
         src = (ROOT / "guardian" / rel).read_text("utf-8")
         assert "Manager()" not in src.replace("watched_manager()", "")
     src = (ROOT / "guardian" / "util" / "parentwatch.py").read_text("utf-8")
-    assert "manager.start(initializer=arm_in_child)" in src
+    assert "manager.start(initializer=arm_in_child, initargs=(os.getpid(),))" in src
 
 
 def test_auto_arm_at_import_uses_argv_only_in_children(monkeypatch):
@@ -356,3 +359,21 @@ def test_auto_arm_at_import_uses_argv_only_in_children(monkeypatch):
     src = (ROOT / "guardian" / "util" / "parentwatch.py").read_text("utf-8")
     assert src.rstrip().endswith("auto_arm()")
     assert parentwatch.spawn_parent_pid(["pytest"]) is None  # inerte ici
+
+
+def test_ci_diag_only_in_probe_mode_and_spawn_logged(monkeypatch, tmp_path):
+    from util import parentwatch
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv(cimode.DRY_ENV, "0")
+    parentwatch.log_spawn("live capture", 12)
+    assert not (tmp_path / "Guardian" / "ci-spawn.log").exists()  # inerte
+    monkeypatch.setenv(cimode.DRY_ENV, "1")
+    parentwatch.log_spawn("live capture", 12)
+    parentwatch.arm_with_pid(0, "x")  # pid nul : rien d'armé, aucune exception
+    log = (tmp_path / "Guardian" / "ci-spawn.log").read_text("utf-8")
+    assert "spawned child pid=12 purpose=live capture" in log
+    assert "arm purpose=x gui_pid=0" in log
+    monkeypatch.setenv(cimode.DRY_ENV, "0")
+    for rel in ("menu/livesession.py", "network/sessions.py"):
+        assert "log_spawn(" in (ROOT / "guardian" / rel).read_text("utf-8")

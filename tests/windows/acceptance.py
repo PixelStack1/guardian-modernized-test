@@ -498,6 +498,19 @@ def scenario_main(
         run.kill_own()
 
 
+def spawn_log_path() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+    return Path(base) / "Guardian" / "ci-spawn.log"
+
+
+def spawn_log() -> list[str]:
+    """Diagnostic CI écrit par l'exe en mode sonde (PID/rôle des enfants)."""
+    try:
+        return spawn_log_path().read_text("utf-8").splitlines()
+    except OSError:
+        return []
+
+
 def same_exe_processes(
     exe: Path, cmdline: bool = False
 ) -> str:  # pragma: no cover - Windows
@@ -527,6 +540,7 @@ def scenario_kill(
         detail = f"{ms:.0f} ms"
         if not ok:  # diagnostic en lecture seule : instances restantes de l'exe
             detail += "; left: " + same_exe_processes(exe, cmdline=True)
+            detail += "; ci-spawn.log: " + " | ".join(spawn_log()[-30:])
         rep.check(f"taskkill /F {target} PID: process tree exited", ok, detail)
         check_driver_gone(rep, f"taskkill-{target}")
     finally:
@@ -577,6 +591,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - Windows
     exe, out = Path(args.exe).resolve(), Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     rep, win = Report(), Win()
+    with contextlib.suppress(OSError):
+        spawn_log_path().unlink()
     rep.metrics["thresholds"] = {k: threshold(k) for k in THRESHOLDS}
     if os.environ.get("GUARDIAN_CI_PROBE") != "1":
         # Sans cette variable (et CI=true), l'exe ignore --ci-probe : protection réelle.
