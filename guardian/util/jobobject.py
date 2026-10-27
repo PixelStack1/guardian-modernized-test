@@ -15,6 +15,7 @@ de garde parentwatch restent en place).
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from typing import Any
 
@@ -24,6 +25,9 @@ JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 JobObjectExtendedLimitInformation = 9
 
 _job_handle: Any = None  # gardé ouvert pendant toute la vie du processus
+_held: Any = None  # dans un worker : handle sur le job du GUI (retarde le kill)
+JOB_NAME_ENV = "GUARDIAN_JOB_NAME"  # hérité par les enfants lancés ensuite
+JOB_OBJECT_QUERY = 0x0004
 
 
 def _structs() -> tuple[Any, Any]:
@@ -93,7 +97,8 @@ def kill_children_with_me(kernel32: Any = None) -> bool:
             kernel32.GetCurrentProcess.restype = wt.HANDLE
             kernel32.AssignProcessToJobObject.argtypes = [wt.HANDLE, wt.HANDLE]
             kernel32.CloseHandle.argtypes = [wt.HANDLE]
-        job = kernel32.CreateJobObjectW(None, None)  # handle non héritable
+        name = f"Local\\GuardianKillJob-{os.getpid()}"
+        job = kernel32.CreateJobObjectW(None, name)  # handle non héritable
         if not job:
             raise OSError(f"CreateJobObjectW failed ({ctypes.get_last_error()})")
         info = extended()
@@ -112,6 +117,7 @@ def kill_children_with_me(kernel32: Any = None) -> bool:
                 f"AssignProcessToJobObject failed ({ctypes.get_last_error()})"
             )
         _job_handle = job
+        os.environ[JOB_NAME_ENV] = name
         logger.info("Kill-on-close job active: children die with Guardian")
         return True
     except Exception as e:
@@ -122,3 +128,32 @@ def kill_children_with_me(kernel32: Any = None) -> bool:
 def log_spawn(purpose: str, pid: Any) -> None:
     """Trace PID + rôle de chaque processus lancé (diagnostic des orphelins)."""
     logger.info("spawned child pid=%s purpose=%s", pid, purpose)
+
+
+def hold_job(kernel32: Any = None) -> bool:
+    """Dans un worker qui tient WinDivert : ouvrir un handle sur le job du GUI.
+    Si le GUI est tué, le job n'est fermé (donc les autres enfants tués) qu'à la
+    sortie de ce worker, APRÈS son nettoyage (fermeture du handle WinDivert puis
+    désenregistrement du pilote). Fail-open."""
+    global _held
+    name = os.environ.get(JOB_NAME_ENV)
+    if _held is not None or not name:
+        return False
+    try:
+        if kernel32 is None:
+            if sys.platform != "win32":
+                return False
+            import ctypes
+            from ctypes import wintypes as wt
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenJobObjectW.restype = wt.HANDLE
+            kernel32.OpenJobObjectW.argtypes = [wt.DWORD, wt.BOOL, wt.LPCWSTR]
+        h = kernel32.OpenJobObjectW(JOB_OBJECT_QUERY, False, name)
+        if not h:
+            return False
+        _held = h
+        return True
+    except Exception as e:
+        logger.warning("hold_job failed (continuing): %s", e)
+        return False

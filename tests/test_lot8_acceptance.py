@@ -382,8 +382,10 @@ def test_job_object_kill_on_close_and_fail_open(monkeypatch):
         def CloseHandle(self, h):
             calls.append("close")
 
+    monkeypatch.setenv(jo.JOB_NAME_ENV, "")  # restauré après le test
     monkeypatch.setattr(jo, "_job_handle", None)
     assert jo.kill_children_with_me(K())
+    assert os.environ[jo.JOB_NAME_ENV].startswith("Local\\GuardianKillJob-")
     assert calls == ["create", ("set", 77, 9), ("assign", 77, -1)]  # soi, pas le parent
     assert jo._job_handle == 77  # handle gardé ouvert
     assert jo.kill_children_with_me(K()) and calls.count("create") == 1
@@ -404,3 +406,24 @@ def test_job_object_kill_on_close_and_fail_open(monkeypatch):
     assert not jo.kill_children_with_me(Boom())
     src = (ROOT / "guardian" / "__main__.py").read_text("utf-8")
     assert src.index("kill_children_with_me()") < src.index("driver.start()")
+
+
+def test_worker_holds_named_job_until_its_cleanup(monkeypatch):
+    from util import jobobject as jo
+
+    class K:
+        def OpenJobObjectW(self, acc, inh, name):
+            self.args = (acc, inh, name)
+            return 55
+
+    monkeypatch.setattr(jo, "_held", None)
+    monkeypatch.delenv(jo.JOB_NAME_ENV, raising=False)
+    assert not jo.hold_job(K())  # pas de job publié : rien
+    monkeypatch.setenv(jo.JOB_NAME_ENV, "Local\\GuardianKillJob-1")
+    k = K()
+    assert jo.hold_job(k) and jo._held == 55
+    assert k.args == (jo.JOB_OBJECT_QUERY, False, "Local\\GuardianKillJob-1")
+    assert not jo.hold_job(k)  # idempotent
+    s = (ROOT / "guardian" / "network" / "sessions.py").read_text("utf-8")
+    body = s[s.index("def open_windivert") : s.index("def probe_filter")]
+    assert "jobobject.hold_job()" in body

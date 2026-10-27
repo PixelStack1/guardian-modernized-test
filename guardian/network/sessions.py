@@ -140,6 +140,8 @@ def open_windivert(
     # Lot 8 : un worker orphelin (GUI tuée) se termine, fermant le handle.
     with contextlib.suppress(Exception):
         parentwatch.watch_worker_parent(on_parent_exit=orphan_cleanup)
+    with contextlib.suppress(Exception):
+        jobobject.hold_job()
     track_handle(handle)
     try:
         yield handle
