@@ -71,3 +71,18 @@ mesures sont dans `metrics` de `acceptance.json` : resserrer après quelques run
   fenêtre au premier plan appartient à ce PID.
 - La sonde applique une liste blanche de clés (`ALLOWED_KEYS`) et masque toute IP
   dans les textes libres.
+
+## Réserve connue — capture « live » survivante après `taskkill /F` du PID GUI
+
+Constat (runs 40564922194, 40566184605) : après un kill brutal de l'enfant GUI, le
+driver WinDivert est bien désenregistré (≤ 10 ms, critère sécurité PASS), mais le
+processus de capture (`--multiprocessing-fork`, rôle « live capture » d'après
+`ci-spawn.log`) reste vivant > 15 s et maintient le bootloader. Son chien de garde
+(OpenProcess SYNCHRONIZE sur le PID GUI, armé dans la cible du Process) se déclenche
+en < 1 s (`gui gone -> exit`), mais le nettoyage borné ne se termine pas
+(`cleanup done` jamais journalisé) et `os._exit` ne termine pas le processus :
+hypothèse, un thread est bloqué dans une E/S driver (WinDivertRecv) non annulable
+après le désenregistrement, et ExitProcess attend la fin de cette E/S.
+Impact : le processus n'a plus d'accès au driver (service supprimé), il n'émet rien
+et ne filtre plus rien. Pas de fail-closed. Piste : annuler l'E/S (CancelIoEx/
+WinDivertShutdown) avant la fermeture, ou recv avec timeout.
