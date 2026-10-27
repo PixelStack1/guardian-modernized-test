@@ -351,6 +351,20 @@ def sc_query() -> str:  # pragma: no cover - Windows
     return (r.stdout or "") + (r.stderr or "")
 
 
+RESTORE_MS = 3000  # attente bornée du retour d'état après un toggle de test
+
+
+def hotkey_diff(
+    new_fired: list[str], before: dict[str, Any], after: dict[str, Any]
+) -> str:
+    """Raccourcis déclenchés et différence d'état, pour un échec 'no hotkey fired'."""
+    keys = sorted(set(before) | set(after))
+    diff = {
+        k: [before.get(k), after.get(k)] for k in keys if before.get(k) != after.get(k)
+    }
+    return f"fired={new_fired} state_diff={diff}"
+
+
 def wait_until(
     fn: Callable[[], Any], timeout_ms: int, step: float = 0.05
 ) -> tuple[bool, float]:
@@ -524,6 +538,9 @@ def scenario_main(
         def flipped(action: str, before: Any) -> Callable[[], bool]:
             return lambda: st().get(action) != before
 
+        def restored(action: str, before: Any) -> Callable[[], bool]:
+            return lambda: st().get(action) == before
+
         ok = post("emergency")
         ok2, _ = wait_until(lambda: st().get("paused") is True, 2000)
         rep.check("hotkey Ctrl+Alt+F12 (WM_HOTKEY): emergency stop engaged", ok and ok2)
@@ -552,8 +569,15 @@ def scenario_main(
                     f"hotkey {action} (WM_HOTKEY): action received and state flipped",
                     ok and changed,
                 )
-            if changed:  # remettre l'état d'origine
+            if changed:  # remettre l'état d'origine, et attendre qu'il le soit
                 post(action)
+                back, ms = wait_until(restored(action, before), RESTORE_MS)
+                if not back:
+                    print(
+                        f"[INFO] hotkey {action}: state not restored after "
+                        f"{ms:.0f} ms (now {st().get(action)!r}, want {before!r})",
+                        flush=True,
+                    )
         # 3c. SendInput réel (fenêtre de Guardian au premier plan).
         fg = win.foreground(run.hwnd, run.child) if run.hwnd else False
         rep.metrics["foreground_ok"] = fg
@@ -563,10 +587,15 @@ def scenario_main(
             sent += win.send_keys(altgr_sequence(letter), run.child)
         time.sleep(1.5)
         rep.metrics["altgr_events_injected"] = sent
+        f1, s1 = fired(), dict(st())
+        quiet = len(f1) == n0 and s1 == s0
+        detail = f"injected={sent} foreground={fg}"
+        if sent and not quiet:
+            detail += "; " + hotkey_diff(f1[n0:], s0, s1)
         rep.check(
             "AltGr+X/A/T/V (real SendInput, Guardian foreground): no hotkey fired",
-            len(fired()) == n0 and st() == s0 if sent else None,
-            f"injected={sent} foreground={fg}",
+            quiet if sent else None,
+            detail,
         )
         azerty_altgr(rep, win, run, fired, st)
         n1 = len(fired())
@@ -640,7 +669,11 @@ def azerty_altgr(
             name, None, "input not delivered (foreground not Guardian); " + detail
         )
         return
-    rep.check(name, len(fired()) == n0 and st() == s0, detail)
+    f1, s1 = fired(), dict(st())
+    quiet = len(f1) == n0 and s1 == s0
+    if not quiet:
+        detail += "; " + hotkey_diff(f1[n0:], s0, s1)
+    rep.check(name, quiet, detail)
 
 
 SNIFF_FILTER = "udp or tcp"
