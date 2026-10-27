@@ -151,3 +151,15 @@ Banc, étape kill-child (contrôles stricts, FAIL bloquant) : état du service
 journalisé à chaque run (`kill_child.service_state`), suppression complète exigée
 (`sc query` -> 1060), aucune boîte « Unhandled exception in script » / « Warning »
 (au kill-child et à la relance, texte relevé dans `dialogs_<tag>.txt`).
+
+### Troisième cause : amorçage d'un enfant multiprocessing après le kill (run 40597530342, tentative 2)
+
+Un enfant `--multiprocessing-fork` démarré au moment du `taskkill /F` de la GUI
+échouait dans `spawn_main` (`reduction.duplicate` : `PermissionError` WinError 5,
+handle du parent disparu). Le wrapper de `freeze_support` relançait l'exception :
+boîte « Unhandled exception in script », puis « Warning » du chargeur (`_MEI`).
+Correctif (audit B1, `util.parentwatch.run_freeze_support`) : uniquement si
+`--multiprocessing-fork` est dans `sys.argv` et que l'exception n'est pas un
+`SystemExit` de code 0/None, traceback dans `ci-crash.log` (sonde CI seulement),
+journal discret, puis `os._exit(1)` sans relancer ; dans tous les autres cas
+(GUI, sortie normale) l'exception est relancée.

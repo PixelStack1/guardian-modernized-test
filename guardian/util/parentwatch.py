@@ -477,43 +477,30 @@ def start_driver_sentinel(timeout: float = 15.0) -> Any:
 FORK_FLAG = "--multiprocessing-fork"
 
 
-def _helper_started() -> bool:
-    """La cible Process a démarré (``_bootstrap`` a remplacé le processus courant) :
-    ce n'est plus l'amorçage spawn_main."""
-    try:
-        import multiprocessing
-
-        # _bootstrap fixe le parent : None dans la GUI et pendant spawn_main.
-        return multiprocessing.parent_process() is not None
-    except Exception:
-        return True  # doute : ne jamais forcer la sortie d'un helper démarré
-
-
 def run_freeze_support(
     freeze: Callable[[], object],
     argv: list[str],
     hard_exit: Callable[[int], object] = os._exit,
-    started: Callable[[], bool] = _helper_started,
 ) -> None:
-    """``freeze_support`` sans boîte « Unhandled exception in script ».
+    """``freeze_support`` sans boîte « Unhandled exception in script » (audit B1).
 
-    Seul un enfant ``--multiprocessing-fork`` dont l'amorçage (spawn_main : lecture
-    du pipe, DuplicateHandle du parent…) échoue est concerné, p. ex. WinError 5 quand
-    la GUI parente vient d'être tuée : traceback dans ci-crash.log (sonde CI
-    uniquement), journal discret sinon, puis ``os._exit(1)`` sans relancer. La GUI
-    et un helper déjà démarré gardent le comportement normal (exception relancée).
-    SystemExit à code entier/None (sortie normale de l'enfant) : toujours transmis."""
+    Uniquement si ``--multiprocessing-fork`` est dans ``argv`` ET que l'exception
+    n'est pas un SystemExit de code 0/None : traceback dans ci-crash.log (sonde CI
+    uniquement), journal discret, puis ``os._exit(1)`` sans relancer (p. ex.
+    spawn_main : WinError 5 quand la GUI parente vient d'être tuée). Dans tous les
+    autres cas (GUI, sortie normale 0/None) : exception relancée."""
     try:
         freeze()
     except BaseException as exc:
-        if isinstance(exc, SystemExit) and isinstance(exc.code, int | None):
+        normal = isinstance(exc, SystemExit) and exc.code in (0, None)
+        if FORK_FLAG not in argv or normal:
+            if not normal:
+                ci_traceback("freeze_support")
             raise
         ci_traceback("multiprocessing child (freeze_support)")
-        if FORK_FLAG not in argv or started():
-            raise
         with contextlib.suppress(Exception):
             logging.getLogger("debugger").info(
-                "multiprocessing child bootstrap failed, exit 1 (parent gone?): %s: %s",
+                "multiprocessing child failed, exit 1 (parent gone?): %s: %s",
                 type(exc).__name__,
                 exc,
             )

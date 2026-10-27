@@ -298,61 +298,56 @@ def test_fork_child_bootstrap_failure_exits_1_quietly(monkeypatch, tmp_path):
     _ci_env(monkeypatch, tmp_path, dry=True)
     codes: list[int] = []
     with pytest.raises(_Exit):  # os._exit simulé : aucune relance de l'erreur
-        parentwatch.run_freeze_support(
-            _boot_fail, FORK, _hard_exit(codes), started=lambda: False
-        )
+        parentwatch.run_freeze_support(_boot_fail, FORK, _hard_exit(codes))
     assert codes == [1]
     text = (tmp_path / "Guardian" / parentwatch.CRASH_LOG).read_text("utf-8")
     assert "freeze_support" in text and "PermissionError" in text
 
 
-def test_fork_child_bootstrap_failure_outside_ci_writes_no_crash_log(
-    monkeypatch, tmp_path
-):
+def test_fork_child_failure_outside_ci_writes_no_crash_log(monkeypatch, tmp_path):
     _ci_env(monkeypatch, tmp_path, dry=False)
     codes: list[int] = []
     with pytest.raises(_Exit):
-        parentwatch.run_freeze_support(
-            _boot_fail, FORK, _hard_exit(codes), started=lambda: False
-        )
+        parentwatch.run_freeze_support(_boot_fail, FORK, _hard_exit(codes))
     assert codes == [1]
     assert not (tmp_path / "Guardian" / parentwatch.CRASH_LOG).exists()
 
 
-def test_gui_process_never_hard_exits(monkeypatch, tmp_path):
-    _ci_env(monkeypatch, tmp_path, dry=False)
+def test_fork_child_nonzero_or_text_system_exit_exits_1():
     codes: list[int] = []
-    with pytest.raises(PermissionError):
-        parentwatch.run_freeze_support(
-            _boot_fail, ["Guardian.exe"], _hard_exit(codes), started=lambda: False
-        )
-    assert codes == []
+    for code in (3, "fatal"):
+
+        def leave(code=code) -> None:
+            raise SystemExit(code)
+
+        with pytest.raises(_Exit):
+            parentwatch.run_freeze_support(leave, FORK, _hard_exit(codes))
+    assert codes == [1, 1]
 
 
-def test_started_helper_never_hard_exits(monkeypatch, tmp_path):
-    _ci_env(monkeypatch, tmp_path, dry=False)
+def test_fork_child_normal_system_exit_passes_through():
     codes: list[int] = []
-    with pytest.raises(PermissionError):
-        parentwatch.run_freeze_support(
-            _boot_fail, FORK, _hard_exit(codes), started=lambda: True
-        )
-    assert codes == []
-
-
-def test_fork_child_integer_system_exit_passes_through():
-    codes: list[int] = []
-    for code in (0, None, 3):
+    for code in (0, None):
 
         def leave(code=code) -> None:
             raise SystemExit(code)
 
         with pytest.raises(SystemExit) as exc:
-            parentwatch.run_freeze_support(
-                leave, FORK, _hard_exit(codes), started=lambda: False
-            )
+            parentwatch.run_freeze_support(leave, FORK, _hard_exit(codes))
         assert exc.value.code == code
     assert codes == []
 
 
-def test_helper_started_false_in_main_process():
-    assert parentwatch._helper_started() is False
+def test_non_fork_argv_reraises_never_hard_exits(monkeypatch, tmp_path):
+    _ci_env(monkeypatch, tmp_path, dry=False)
+    codes: list[int] = []
+    with pytest.raises(PermissionError):
+        parentwatch.run_freeze_support(_boot_fail, ["Guardian.exe"], _hard_exit(codes))
+    for code in (3, "x"):
+
+        def leave(code=code) -> None:
+            raise SystemExit(code)
+
+        with pytest.raises(SystemExit):
+            parentwatch.run_freeze_support(leave, ["Guardian.exe"], _hard_exit(codes))
+    assert codes == []

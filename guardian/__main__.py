@@ -132,8 +132,8 @@ if __name__ == "__main__":
 
         _pw.watch_spawn_parent(sys.argv, on_parent_exit=_orphan)
         _pw.install_ci_thread_hook()
-    # Enfant dont l'amorçage échoue (parent tué) : journal + os._exit(1), sans boîte
-    # du chargeur ; GUI et helper démarré : inchangés (util.parentwatch).
+    # Audit B1 : enfant --multiprocessing-fork en échec (hors SystemExit 0/None) :
+    # journal + os._exit(1), sans boîte du chargeur ; sinon relancé (util.parentwatch).
     try:
         from util.parentwatch import run_freeze_support as _run_freeze
     except Exception:
