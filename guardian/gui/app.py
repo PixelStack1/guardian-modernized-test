@@ -81,16 +81,24 @@ def run_gui(
     factory: Callable[[], Any] | None = None,
     version: str = "",
     on_shutdown: Callable[[], Any] | None = None,
+    probe: Any = None,
 ) -> int:  # pragma: no cover - interactif, Windows
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
+    if probe is not None:
+        probe.mark("qt_app_created")
     splash = startup_window(version)
     close_pyi_splash()
+    if probe is not None:  # lot 8 : banc CI uniquement (--ci-probe)
+        probe.mark("startup_window")
 
     from gui.window import MainWindow
     from menu import livesession as ls
+
+    if probe is not None:
+        probe.mark("menu_imported")
 
     # Lot 7 : arrêt propre aussi à la fin de session Windows (aboutToQuit).
     app.aboutToQuit.connect(ls.stop_background)
@@ -107,6 +115,9 @@ def run_gui(
         win = MainWindow(session, version, global_hotkeys=True)
         win.show()
         splash.close()
+        if probe is not None:
+            probe.mark("window_shown")
+            probe.attach(win)
         return int(app.exec())
     finally:
         splash.close()

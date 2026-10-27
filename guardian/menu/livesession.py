@@ -17,6 +17,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import logging
+import os
 import queue
 import re
 import shutil
@@ -25,7 +26,7 @@ import time
 from collections.abc import Callable, Collection, MutableMapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from multiprocessing import Manager, Process, Queue, Value
+from multiprocessing import Process, Queue, Value
 from typing import Any
 
 from colorama import Fore, Style
@@ -41,6 +42,7 @@ from network.relay import (
     normalize,
     toggled,
 )
+from util import parentwatch
 from util.geoip import country_code
 from util.i18n import t
 from util.sound import beep
@@ -1641,6 +1643,7 @@ class BackgroundSession:
             return
         self.started = True
         self.proc.start()
+        parentwatch.log_spawn("live capture", getattr(self.proc, "pid", "?"))
         self._thread.start()
 
     def alive(self) -> bool:
@@ -1910,7 +1913,7 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
     from network.sessions import extra_ports_enabled
 
     config = ConfigData()
-    manager = Manager()
+    manager = parentwatch.watched_manager()
     blocked: MutableMapping[str, float] = manager.dict()
     total_blocked: MutableMapping[str, float] = manager.dict()
     total_flag = Value("b", 0)
@@ -1981,8 +1984,11 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
     if ranges_ok:
         saver.request(ctrl.auto_entries)  # réécrit le fichier purgé/filtré
     proc = Process(
-        target=capture_loop,
+        target=parentwatch.armed_target,
         args=(
+            os.getpid(),
+            "live capture",
+            capture_loop,
             blocked,
             packets,
             extra_ports_enabled(),

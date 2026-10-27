@@ -1,5 +1,17 @@
 # Changelog
 
+
+## Lot 8 — banc d'acceptation Windows en CI
+- Durcissement : `--ci-probe` exige `GUARDIAN_CI_PROBE=1` + `CI=true` ; bandeau rouge « MODE TEST CI » ; banc limité au HWND/thread du PID de Guardian ; liste blanche des clés de la sonde.
+- Workers de capture : chien de garde du PID lanceur (argv `parent_pid`) dès le démarrage ; si la GUI est tuée (`taskkill /F`), chaque worker ferme ses handles WinDivert (fail-open) puis désenregistre le pilote si Guardian l'avait chargé (constaté par le banc CI : pilote resté RUNNING, bootloader bloqué).
+
+- `--ci-probe <json>` (test uniquement, inerte sinon) : filtre WinDivert à blanc
+  `false` (aucun paquet capturé ni renvoyé) et état de la GUI écrit en JSON.
+- `tests/windows/acceptance.py` : fin de tâche (enfant, bootloader), WM_CLOSE,
+  déconnexion annulée, raccourcis (RegisterHotKey ×5, WM_HOTKEY, SendInput AltGr
+  et Ctrl+Alt+F12), SHA256 affiché, temps jusqu'à l'écran de démarrage.
+  Voir docs/ci-acceptance.md. Étape de workflow fournie à part (jeton sans `workflow`).
+
 ## Non publié — Lot 7 (extras)
 
 - Amis : jamais jetés par la capture (même bloqués, en panique ou verrou), blocage manuel refusé, ignorés par le bouclier auto, retirés des blocages chargés au démarrage. Page « Amis » traduite (i18n).

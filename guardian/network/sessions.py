@@ -6,14 +6,16 @@ import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
-from multiprocessing import Manager, Process
+from multiprocessing import Process
 from multiprocessing.managers import DictProxy, ListProxy
 from typing import TYPE_CHECKING
 
 import pydivert
 
 from network.sessioninfo import SessionInfo
+from util import parentwatch
 from util.console import get_original_console_title, set_console_title
+from util.driver import orphan_cleanup, track_handle, untrack_handle
 from util.dynamicblacklist import T2_EU_FALLBACK, T2_US_FALLBACK
 from util.network import construct_cidr_block_set, ip_in_cidr_block_set
 from util.types import CIDR_BLOCK
@@ -86,6 +88,10 @@ PACKET_FILTER = (
 
 def packet_filter(extra_ports: bool = True) -> str:
     """Strict filter: UDP to exactly 6672 (+ inbound 61455-61458 if enabled), nothing else."""
+    from util.cimode import DRY_FILTER, dry
+
+    if dry():  # CI acceptance only (--ci-probe): match nothing, send nothing
+        return DRY_FILTER
     return PACKET_FILTER if extra_ports else PACKET_FILTER_6672_ONLY
 
 
@@ -131,9 +137,14 @@ def open_windivert(
         raise FilterOpenError(
             f"WinDivert open failed for filter {filter_!r}: {e}"
         ) from e
+    # Lot 8 : un worker orphelin (GUI tuée) se termine, fermant le handle.
+    with contextlib.suppress(Exception):
+        parentwatch.watch_worker_parent(on_parent_exit=orphan_cleanup)
+    track_handle(handle)
     try:
         yield handle
     finally:
+        untrack_handle(handle)
         if handle.is_open:
             handle.close()
 
@@ -237,6 +248,7 @@ class AbstractPacketFilter(ABC):
 
     def start(self) -> None:
         self.process.start()
+        parentwatch.log_spawn(type(self).__name__, getattr(self.process, "pid", "?"))
         logger.info("Dispatched %s blocker process", self.__class__.__name__)
         set_console_title(f"{get_original_console_title()} - {self.__class__.__name__}")
 
@@ -503,6 +515,7 @@ class DebugSession:
 
     def start(self) -> None:
         self.process.start()
+        parentwatch.log_spawn(type(self).__name__, getattr(self.process, "pid", "?"))
 
     def stop(self) -> None:
         self.process.terminate()
@@ -595,9 +608,9 @@ class IPCollector:
         self.extra_ports = extra_ports_enabled()
         self.priority = priority
         self.process = Process(target=self.run, daemon=True)
-        self.ips: ListProxy[str] = Manager().list()
+        self.ips: ListProxy[str] = parentwatch.watched_manager().list()
         self.seen_ips: DictProxy[str, int] = (
-            Manager().dict()
+            parentwatch.watched_manager().dict()
         )  # key is IP address, value is packets seen
         self.min_packets = packet_count_min_threshold  # minimum amount of packets required to be seen to be added
 
@@ -617,6 +630,7 @@ class IPCollector:
 
     def start(self) -> None:
         self.process.start()
+        parentwatch.log_spawn(type(self).__name__, getattr(self.process, "pid", "?"))
         logger.info("Dispatched IPCollector process")
 
     def stop(self) -> None:

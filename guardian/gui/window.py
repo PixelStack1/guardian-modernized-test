@@ -1262,6 +1262,22 @@ class NavButton(QPushButton):
 class MainWindow(QMainWindow):
     """Fenêtre Guardian. ``session`` : BackgroundSession déjà démarrée."""
 
+    ci_banner: QLabel | None = None
+
+    def show_ci_banner(self) -> None:
+        """Bandeau rouge permanent du mode test CI (lot 8, ``--ci-probe`` autorisé)."""
+        if self.ci_banner is not None:
+            return
+        b = QLabel(t("gui.ci_banner"))
+        b.setObjectName("ciBanner")
+        b.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        b.setStyleSheet(
+            "#ciBanner { background: #c62828; color: white; font-weight: 700;"
+            " padding: 6px; border-radius: 4px; }"
+        )
+        self._col.insertWidget(0, b)
+        self.ci_banner = b
+
     # Ordre et icônes de la maquette ; « Amis » en plus, sous la liste.
     PAGES = [
         "Session en direct",
@@ -1329,6 +1345,8 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(page)
         col.addWidget(self.stack, 1)
         col.addWidget(self._footer())
+        self._col = col
+        self.ci_banner = None
         main.addLayout(col, 1)
         self.setCentralWidget(central)
         self.show_page(0)

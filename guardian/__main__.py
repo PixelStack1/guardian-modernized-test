@@ -2,14 +2,16 @@ import contextlib
 import ctypes
 import logging
 import sys
+import time
 from multiprocessing import freeze_support
 
 import pydivert
 
 from network.sessions import FilterOpenError, extra_ports_enabled, probe_filter
+from util import cimode
 from util.console import attach_console
 from util.crash import crash_report
-from util.driver import DriverLifecycle
+from util.driver import OWNED_ENV, DriverLifecycle, mark_owned
 from util.i18n import t
 from util.integrity import IntegrityError, secure_windivert
 from util.paths import data_file
@@ -43,6 +45,8 @@ if not debug_logger.handlers:
 
 
 CONSOLE_MODE = "--console" in sys.argv
+PYTHON_START = time.time()
+cimode.mark("imports_done")
 
 
 def gui_mode(argv: list[str]) -> bool:
@@ -74,7 +78,30 @@ def notify(text: str, console: bool | None = None) -> None:
 
 
 if __name__ == "__main__":
+    # Lot 8 : un enfant multiprocessing quitte si la GUI qui l'a lancé est tuée.
+    with contextlib.suppress(Exception):
+        from util import parentwatch as _pw
+        from util.driver import orphan_cleanup as _orphan
+
+        _pw.watch_spawn_parent(sys.argv, on_parent_exit=_orphan)
     freeze_support()
+    # Audit R1/R3 : APRÈS freeze_support (un enfant multiprocessing y est aiguillé et
+    # n'atteint jamais ce point : il garde l'état transmis par la GUI). Le processus
+    # principal n'hérite jamais d'un état CI/pilote venu de l'extérieur.
+    import os as _os
+
+    _os.environ.pop(cimode.DRY_ENV, None)
+    _os.environ.pop(OWNED_ENV, None)
+    # Lot 8 : banc d'acceptation CI uniquement (inerte sans --ci-probe).
+    CI_PROBE = cimode.probe_effective(sys.argv)
+    if CI_PROBE is None and cimode.probe_path(sys.argv) is not None:
+        logger.warning(
+            "--ci-probe ignored (GUI only, needs GUARDIAN_CI_PROBE=1 and CI=true):"
+            " normal protection"
+        )
+    if CI_PROBE is not None:
+        cimode.enable_dry()
+        logger.warning("CI acceptance probe: dry filter, state -> %s", CI_PROBE)
     if CONSOLE_MODE:
         # Exécutable fenêtré (sans console) : en ouvrir une pour --console.
         attach_console()
@@ -96,7 +123,15 @@ if __name__ == "__main__":
             sys.exit(3)
         logger.info("WinDivert binaries verified: %s", hashes)
         driver = DriverLifecycle(pydivert.WinDivert)
+        # Sentinelle armée AVANT le chargement : aucune fenêtre sans gardien.
+        from util import parentwatch as _pwatch
+
+        sentinel_owned = _pwatch.start_driver_sentinel()
         driver.start()
+        cimode.mark("driver_loaded")
+        mark_owned(driver.loaded_by_guardian)  # hérité par les workers / Manager
+        if sentinel_owned is not None and driver.loaded_by_guardian:
+            sentinel_owned.value = 1
         # Lot 7 : notre handle (session en fond) est fermé AVANT le pilote, et le
         # nettoyage couvre aussi fermeture de console / déconnexion / arrêt.
         from menu.livesession import stop_background
@@ -130,7 +165,16 @@ if __name__ == "__main__":
         elif gui_mode(sys.argv):
             from gui.app import run_gui
 
-            run_gui(version=__version__, on_shutdown=driver.cleanup)
+            gui_probe = None
+            if CI_PROBE is not None:
+                from gui.ciprobe import CiProbe
+
+                marks = {"python_start": PYTHON_START, **cimode.MARKS}
+                started = cimode.process_start_time()
+                if started is not None:
+                    marks["process_start"] = started
+                gui_probe = CiProbe(CI_PROBE, marks)
+            run_gui(version=__version__, on_shutdown=driver.cleanup, probe=gui_probe)
         else:
             close_splash()
             # Import tardif : menu.menu télécharge les plages Azure à l'import ;
