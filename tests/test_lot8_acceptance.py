@@ -632,8 +632,9 @@ def _run_env_probe(mode, env, tmp_path):
     }
     full.update(env)
     paths = [str(ROOT / "guardian")]
-    if importlib.util.find_spec("pydivert") is None:  # comme tests/conftest.py
-        paths.append(str(ROOT / "tests" / "_fakes"))
+    spec = importlib.util.find_spec("pydivert")
+    if spec is None or "_fakes" in (spec.origin or ""):
+        pytest.skip("pydivert réel absent (stub tests/_fakes)")
     full["PYTHONPATH"] = os.pathsep.join(paths)
     full["HOME"] = full["LOCALAPPDATA"] = full["APPDATA"] = str(tmp_path)
     full["XDG_DATA_HOME"] = str(tmp_path)
