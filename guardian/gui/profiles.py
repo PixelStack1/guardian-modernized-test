@@ -84,7 +84,8 @@ def toggle_emergency(session: Any) -> bool:
 
 
 def apply_profile(session: Any, key: str) -> bool:
-    """Applique le profil ``key`` à la session (sous son verrou). Faux si inconnu."""
+    """Applique le profil ``key`` à la session (sous son verrou). Faux si inconnu
+    ou si l'arrêt d'urgence est actif."""
     p = PROFILES.get(key)
     if p is None:
         return False
@@ -93,7 +94,9 @@ def apply_profile(session: Any, key: str) -> bool:
         config = session.config
         try:
             if getattr(ctrl, "filtering_paused", False):
-                ctrl.resume_filtering()  # choisir un profil = reprendre le filtrage
+                # Refusé : la reprise rétablirait l'instantané et écraserait le profil.
+                ls.set_toggle_msg(ctrl, t("live.ev.paused_locked"))
+                return False
             ctrl.panic = p.panic
             if bool(ctrl.session_lock) != p.session_lock:
                 ctrl.toggle_session_lock()  # peut refuser (liste des IP vues pleine)

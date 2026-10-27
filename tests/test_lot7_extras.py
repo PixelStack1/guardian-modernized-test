@@ -16,6 +16,7 @@ from menu import livesession as ls
 from util import exehash, health
 from util.driver import CTRL_CLOSE_EVENT, DriverLifecycle
 from util.hotkeys import DEFAULT_HOTKEYS, GlobalHotkeys, hotkey_text
+from util.i18n import t
 
 FRIEND = "192.0.2.160"
 OTHER = "203.0.113.22"
@@ -154,13 +155,30 @@ def test_profiles_apply_and_persist(tmp_path, key):
     assert current_profile(c) == key
 
 
-def test_profile_resumes_after_emergency(tmp_path):
-    from gui.profiles import apply_profile
+def test_profile_and_toggles_blocked_during_emergency(tmp_path):
+    from gui.profiles import PROFILES, apply_profile
 
     s = make_session(tmp_path)
-    s.ctrl.emergency_stop()
-    apply_profile(s, "public")
-    assert not s.ctrl.filtering_paused
+    c = s.ctrl
+    before = (c.panic, c.session_lock, c.auto_block, c.total_block, c.offender_drop)
+    c.emergency_stop()
+    assert not apply_profile(s, "public")
+    for k in "atvxc":
+        ls.handle_key(k, c, [], s.blocked, s.recorder, lambda _t: "", s.config)
+    assert (c.panic, c.session_lock, c.auto_block, c.total_block, c.offender_drop) == (
+        False,
+        False,
+        False,
+        False,
+        False,
+    )
+    assert c.filtering_paused
+    assert c.toggle_msg and c.toggle_msg[0] == t("live.ev.paused_locked")
+    c.resume_filtering()
+    after = (c.panic, c.session_lock, c.auto_block, c.total_block, c.offender_drop)
+    assert after == before  # rien n'a été écrasé
+    assert apply_profile(s, "public")
+    assert c.panic == PROFILES["public"].panic
     assert not apply_profile(s, "inconnu")
 
 

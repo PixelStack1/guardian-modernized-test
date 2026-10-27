@@ -1418,6 +1418,10 @@ def clamp_page(
     return paginate(total, rows_per_page(height, len(head)), page)[2]
 
 
+# Bascules sauvegardées par l'arrêt d'urgence (refusées tant qu'il est actif).
+PAUSE_LOCKED_KEYS = frozenset("atvxc")
+
+
 def handle_key(
     key: str,
     ctrl: LiveSessionController,
@@ -1430,6 +1434,10 @@ def handle_key(
 ) -> None:
     """Action d'une touche de la vue en direct. Les bascules A/T n'affichent aucune
     invite : l'état change, est sauvegardé et la frame suivante l'affiche."""
+    if key in PAUSE_LOCKED_KEYS and getattr(ctrl, "filtering_paused", False):
+        # Arrêt d'urgence : la reprise rétablirait l'instantané et écraserait ce choix.
+        set_toggle_msg(ctrl, t("live.ev.paused_locked"))
+        return
     if key == "b":
         peer = _pick(peers, prompt(t("live.ask_block")))
         if peer and is_rockstar_server(peer.ip):

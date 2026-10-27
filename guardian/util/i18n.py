@@ -496,6 +496,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "fr": "Filtrage repris : blocages enregistrés rétablis",
         "en": "Filtering resumed: saved blocks restored",
     },
+    "live.ev.paused_locked": {
+        "fr": "Arrêt d'urgence actif : reprends le filtrage avant de changer de profil ou de bascule",
+        "en": "Emergency stop active: resume filtering before changing profile or toggles",
+    },
     "live.ev.friend_refused": {
         "fr": "Blocage refusé : {ip} est dans la liste d'amis",
         "en": "Block refused: {ip} is on the friend list",
