@@ -32,6 +32,14 @@ from colorama import Fore, Style
 from config.configdata import ConfigData
 from config.globallist import Blacklist
 from network.anomaly import LEVEL_KEYS, Level, PeerState, SessionMonitor
+from network.relay import (
+    RELAY_DEFAULT,
+    RELAY_KEY,
+    is_block,
+    is_relay_traffic,
+    normalize,
+    toggled,
+)
 from util.geoip import country_code
 from util.i18n import t
 
@@ -85,13 +93,26 @@ def should_drop(
     total: MutableMapping[str, float],
     now: float,
     total_on: bool = True,
+    relay_block: bool = False,
+    relay_traffic: bool = False,
 ) -> bool:
     """Décision par paquet (aucune modification, aucune création de paquet).
+
+    ``relay_block`` (réglage « relais Rockstar » = bloquer) : un paquet de/vers une IP
+    Rockstar est jeté SEULEMENT si ``relay_traffic`` (network.relay.is_relay_traffic :
+    UDP, port 6672, hors tailles heartbeat/matchmaking). Authentification, Social Club,
+    matchmaking : jamais jetés. Par défaut False : comportement v3.6.1.
 
     Entrant : rejeté si la source est bloquée. Sortant : rejeté UNIQUEMENT si la
     destination exacte est en coupure sortante (mode blocage total) et toujours
     bloquée en entrant. En cas d'erreur, le paquet passe (fail-safe)."""
     try:
+        if (
+            relay_block
+            and relay_traffic
+            and is_rockstar_server(src if inbound else dst)
+        ):
+            return True
         if inbound:
             return is_blocked(blocked, src, now)
         if not total_on:  # mode blocage total OFF : aucun sortant n'est jeté
@@ -109,12 +130,14 @@ def handle_packet(
     total: MutableMapping[str, float],
     now: float,
     total_on: bool = True,
+    relay_block: bool = False,
 ) -> bool:
     """Réinjecte le paquet ORIGINAL tel quel (``w.send(packet)``) ou le jette.
     Renvoie True si envoyé. Jamais de paquet fabriqué ni modifié."""
     try:
         inbound = bool(packet.is_inbound)
         outbound = bool(packet.is_outbound)
+        relay_traffic = relay_block and relay_packet(packet)
         drop = (inbound or outbound) and should_drop(
             inbound,
             packet.ip.src_addr,
@@ -123,6 +146,8 @@ def handle_packet(
             total,
             now,
             total_on,
+            relay_block,
+            relay_traffic,
         )
     except Exception:
         drop = False
@@ -130,6 +155,17 @@ def handle_packet(
         return False
     w.send(packet)
     return True
+
+
+def relay_packet(packet: Any) -> bool:
+    """Métadonnées seulement (protocole, port, taille) ; toute erreur = False (passe).
+    Le port de jeu est le port de destination dans les deux sens (filtre WinDivert :
+    entrant vers notre 6672, sortant vers le 6672 du pair)."""
+    try:
+        udp = getattr(packet, "udp", None) is not None
+        return is_relay_traffic(udp, int(packet.dst_port), len(packet.payload))
+    except Exception:
+        return False
 
 
 def read_flag(flag: Any) -> bool:
@@ -149,6 +185,7 @@ def capture_loop(
     extra_ports: bool,
     total_blocked: MutableMapping[str, float] | None = None,
     total_flag: Any = None,
+    relay_flag: Any = None,
 ) -> None:  # pragma: no cover - nécessite Windows + WinDivert
     from network.sessions import open_windivert, packet_filter
 
@@ -161,6 +198,7 @@ def capture_loop(
         local: dict[str, float] = dict(blocked)
         local_total: dict[str, float] = {}
         total_on = False
+        relay_on = False
         next_refresh = 0.0
         for packet in w:
             inbound = bool(packet.is_inbound)
@@ -170,8 +208,9 @@ def capture_loop(
                 local = dict(blocked)
                 local_total = dict(total_blocked) if total_blocked is not None else {}
                 total_on = read_flag(total_flag)
+                relay_on = read_flag(relay_flag)
                 next_refresh = now + BLOCKLIST_REFRESH
-            handle_packet(w, packet, local, local_total, now, total_on)
+            handle_packet(w, packet, local, local_total, now, total_on, relay_on)
             with contextlib.suppress(queue.Full):
                 port = packet.src_port if inbound else packet.dst_port
                 out.put_nowait((now, ip, len(packet.payload), inbound, int(port or 0)))
@@ -372,8 +411,13 @@ class LiveSessionController:
         total_block: bool = TOTAL_BLOCK_DEFAULT,
         total_blocked: MutableMapping[str, float] | None = None,
         total_flag: Any = None,
+        relay_mode: str = RELAY_DEFAULT,
+        relay_flag: Any = None,
     ) -> None:
         self.blocked = blocked
+        # Réglage « relais Rockstar » (autoriser/bloquer), partagé avec la capture.
+        self.relay_flag = relay_flag
+        self.relay_mode = relay_mode
         # reporter(ip, type « auto »/« manual », pseudo) : rapport d'incident à chaque blocage.
         self.reporter = reporter
         # Faux si les plages Rockstar/Azure sont inconnues : bouclier auto interdit.
@@ -447,6 +491,24 @@ class LiveSessionController:
             self.total_blocked.clear()
             if cleared and hasattr(self, "events"):
                 self.events.append(t("live.ev.total_cleared", n=cleared))
+
+    @property
+    def relay_mode(self) -> str:
+        return self._relay_mode
+
+    @relay_mode.setter
+    def relay_mode(self, mode: str) -> None:
+        self._relay_mode = normalize(mode)
+        if self.relay_flag is not None:
+            with contextlib.suppress(Exception):
+                self.relay_flag.value = is_block(self._relay_mode)
+
+    @property
+    def relay_block(self) -> bool:
+        return is_block(self.relay_mode)
+
+    def toggle_relay(self) -> None:
+        self.relay_mode = toggled(self.relay_mode)
 
     def toggle_total_block(self) -> None:
         self.total_block = self.auto_block_available and not self.total_block
@@ -601,6 +663,13 @@ def status_word(enabled: bool) -> str:
     return Fore.RED + t("live.off") + Style.RESET_ALL
 
 
+def relay_word(ctrl: LiveSessionController) -> str:
+    """« autoriser » en vert (défaut), « bloquer » en rouge."""
+    if ctrl.relay_block:
+        return Fore.RED + t("live.relay_block") + Style.RESET_ALL
+    return Fore.GREEN + t("live.relay_allow") + Style.RESET_ALL
+
+
 def recording_status(active: bool, path: str = "") -> str:
     """État de l'enregistrement pour l'en-tête (seul le mot d'état est coloré)."""
     if active:
@@ -627,6 +696,7 @@ def render_head(
             state=status_word(ctrl.total_block),
         ),
         t("live.total_warning"),
+        t("live.relay_status", state=relay_word(ctrl)),
         *(
             []
             if ctrl.auto_block_available
@@ -917,6 +987,15 @@ def handle_key(
         set_toggle_msg(
             ctrl, t("live.ev.total_toggled", state=status_word(ctrl.total_block))
         )
+    elif key == "l":
+        ctrl.toggle_relay()
+        if config is not None:
+            try:
+                config.data[RELAY_KEY] = ctrl.relay_mode
+                config.save()
+            except Exception:
+                logger.debug("sauvegarde de %s impossible", RELAY_KEY, exc_info=True)
+        set_toggle_msg(ctrl, t("live.ev.relay_toggled", state=relay_word(ctrl)))
     elif key == "e":
         if recorder.active:
             recorder.stop()
@@ -979,9 +1058,12 @@ class BackgroundSession:
         closers: list[Callable[[], Any]] | None = None,
         config: Any = None,
         blocked: MutableMapping[str, float] | None = None,
+        new_players: Any = None,
     ) -> None:
         import threading
 
+        # NewPlayerTracker (alerte + journal) ou None.
+        self.new_players = new_players
         self.proc = proc
         self.packets = packets
         self.ctrl = ctrl
@@ -1021,6 +1103,13 @@ class BackgroundSession:
             with self.lock:
                 self.recorder.write(ts, ip, size, inbound)
                 note_player(self.counter, ip, inbound)
+                if self.new_players is not None:
+                    try:
+                        alert = self.new_players.observe(ts, ip, inbound)
+                    except Exception:
+                        alert = None
+                    if alert:
+                        self.ctrl.events.append(alert)
                 if inbound:
                     self.monitor.add_packet(ip, size, ts, port)
         except queue.Empty:
@@ -1214,6 +1303,7 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
     blocked: MutableMapping[str, float] = manager.dict()
     total_blocked: MutableMapping[str, float] = manager.dict()
     total_flag = Value("b", 0)
+    relay_flag = Value("b", 0)
     packets: Queue[Packet] = Queue(QUEUE_MAX)
     from config.globallist import Whitelist
     from menu.menu import Menu  # import tardif : menu.py importe ce module
@@ -1244,6 +1334,8 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
         total_block=bool(config.data.get(TOTAL_BLOCK_KEY, TOTAL_BLOCK_DEFAULT)),
         total_blocked=total_blocked,
         total_flag=total_flag,
+        relay_mode=normalize(config.data.get(RELAY_KEY, RELAY_DEFAULT)),
+        relay_flag=relay_flag,
         # Lecture une seule fois, avant le démarrage de la capture.
         auto_entries=autoblock.load(time.time(), guard, max_seconds=AUTO_BLOCK_SECONDS)
         if ranges_ok
@@ -1253,7 +1345,14 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
         saver.request(ctrl.auto_entries)  # réécrit le fichier purgé/filtré
     proc = Process(
         target=capture_loop,
-        args=(blocked, packets, extra_ports_enabled(), total_blocked, total_flag),
+        args=(
+            blocked,
+            packets,
+            extra_ports_enabled(),
+            total_blocked,
+            total_flag,
+            relay_flag,
+        ),
         daemon=True,
     )
     return BackgroundSession(
@@ -1267,6 +1366,18 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
         closers=[writer.close, saver.close, manager.shutdown],
         config=config,
         blocked=blocked,
+        new_players=make_new_player_tracker(),
+    )
+
+
+def make_new_player_tracker() -> Any:
+    """Tracker nouveau joueur avec journal sous %LOCALAPPDATA%\\Guardian\\journal."""
+    from network.newplayer import NewPlayerTracker, PlayerJournal
+
+    return NewPlayerTracker(
+        is_rockstar_server,
+        PlayerJournal(),
+        alert=lambda ip, cc: t("live.ev.new_player", ip=ip, country=cc),
     )
 
 
