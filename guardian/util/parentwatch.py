@@ -27,7 +27,7 @@ def is_onefile_child() -> bool:
     if not getattr(sys, "frozen", False) or not meipass:
         return False
     exe_dir = os.path.normcase(os.path.abspath(os.path.dirname(sys.executable)))
-    return exe_dir != os.path.normcase(os.path.abspath(meipass))
+    return bool(exe_dir != os.path.normcase(os.path.abspath(meipass)))
 
 
 def windows_parent_probe(kernel32: Any = None) -> Callable[[], bool] | None:
