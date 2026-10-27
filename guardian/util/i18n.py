@@ -487,6 +487,16 @@ STRINGS: dict[str, dict[str, str]] = {
         "fr": "Blocage refusé : {ip} est un serveur Rockstar (vous perdriez la session)",
         "en": "Block refused: {ip} is a Rockstar server (you would lose the session)",
     },
+    "gui.shield_help": {
+        "fr": "Une rafale partant d'un débit bas est coupée au plus tôt après 3 s "
+        "(réglage par défaut). Jamais pour les amis, la liste blanche, "
+        "Rockstar/Take-Two ou Azure. Limite connue : 3 s de silence puis 2 s "
+        "jusqu'à ~600 paquets/s, en boucle, n'est pas coupé.",
+        "en": "A burst starting from a low rate is cut off after 3 s at the "
+        "earliest (default setting). Never for friends, the whitelist, "
+        "Rockstar/Take-Two or Azure. Known limitation: 3 s of silence then 2 s "
+        "at up to ~600 packets/s, repeated, is not cut off.",
+    },
     "live.ev.auto_toggled": {
         "fr": "Bouclier auto : {state}",
         "en": "Auto shield: {state}",

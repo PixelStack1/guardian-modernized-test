@@ -1,3 +1,4 @@
+import contextlib
 import ctypes
 import logging
 import sys
@@ -7,6 +8,7 @@ import pydivert
 
 from menu.menu import Menu
 from network.sessions import FilterOpenError, extra_ports_enabled, probe_filter
+from util.console import attach_console
 from util.crash import crash_report
 from util.driver import DriverLifecycle
 from util.i18n import t
@@ -41,20 +43,42 @@ if not debug_logger.handlers:
 debug_logger.addHandler(fh)
 
 
+CONSOLE_MODE = "--console" in sys.argv
+
+
+def gui_mode(argv: list[str]) -> bool:
+    """GUI par défaut (lot 5) ; ``--console`` garde l'ancienne interface texte."""
+    return "--console" not in argv and "--self-test-exit" not in argv
+
+
+def notify(text: str) -> None:
+    """Message utilisateur : console, ou boîte de dialogue Windows en mode fenêtré."""
+    if CONSOLE_MODE or sys.stdout is not None:
+        print_white(text)
+    if not CONSOLE_MODE:
+        with contextlib.suppress(Exception):
+            ctypes.windll.user32.MessageBoxW(0, text, "Guardian", 0x10)
+
+
 if __name__ == "__main__":
     freeze_support()
+    if CONSOLE_MODE:
+        # Exécutable fenêtré (sans console) : en ouvrir une pour --console.
+        attach_console()
 
     try:
         if not ctypes.windll.shell32.IsUserAnAdmin():
-            print_white(t("main.need_admin"))
+            notify(t("main.need_admin"))
             logger.info("Started without admin")
-            input(t("main.press_enter"))
+            if CONSOLE_MODE:
+                input(t("main.press_enter"))
             sys.exit()
-        print_white(t("main.init"))
+        if CONSOLE_MODE:
+            print_white(t("main.init"))
         try:
             hashes = secure_windivert()
         except IntegrityError as e:
-            print_white(t("main.integrity", e=e))
+            notify(t("main.integrity", e=e))
             logger.error("WinDivert integrity check failed: %s", e)
             sys.exit(3)
         logger.info("WinDivert binaries verified: %s", hashes)
@@ -63,7 +87,7 @@ if __name__ == "__main__":
         try:
             probe_filter(extra_ports_enabled())
         except FilterOpenError as e:
-            print_white(t("main.filter_failed", e=e))
+            notify(t("main.filter_failed", e=e))
             logger.error("WinDivert filter open failed: %s", e)
             driver.cleanup()
             sys.exit(4)
@@ -76,6 +100,10 @@ if __name__ == "__main__":
         if "--self-test-exit" in sys.argv:
             # Non-interactive quit path used by CI: initialise (driver loaded), then exit normally.
             print_white(t("main.self_test"))
+        elif gui_mode(sys.argv):
+            from gui.app import run_gui
+
+            run_gui(version=__version__)
         else:
             Menu.main_menu()
     except KeyboardInterrupt:
