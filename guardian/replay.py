@@ -47,11 +47,14 @@ def read_rows(lines: TextIO) -> Iterator[Row]:
     """Lignes valides du CSV (en-tête obligatoire). Les lignes invalides sont ignorées."""
     reader = csv.reader(lines)
     header = next(reader, None)
-    if header is None or tuple(h.strip() for h in header) != HEADER:
+    # Les captures de la boîte noire (lot 4) ajoutent des colonnes après les 4
+    # colonnes de base : seules ces 4 premières sont lues.
+    if header is None or tuple(h.strip() for h in header[: len(HEADER)]) != HEADER:
         raise ValueError(f"en-tête attendu : {','.join(HEADER)}")
     for row in reader:
-        if len(row) != 4:
+        if len(row) != len(header):
             continue
+        row = row[:4]
         try:
             ts, ip, size, sens = float(row[0]), row[1].strip(), int(row[2]), row[3]
         except ValueError:
