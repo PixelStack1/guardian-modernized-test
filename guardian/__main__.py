@@ -67,8 +67,8 @@ def notify(text: str, console: bool | None = None) -> None:
         try:
             ctypes.windll.user32.MessageBoxW(0, text, "Guardian", 0x10)
             return
-        except Exception:
-            pass
+        except Exception as e:
+            debug_logger.debug("MessageBoxW failed, console fallback: %s", e)
     if sys.stdout is not None:
         print_white(text)
 
