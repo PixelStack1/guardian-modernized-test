@@ -822,3 +822,125 @@ def test_replay_early_fixture_respects_toggle():
     with EARLY10.open(newline="", encoding="utf-8") as f:
         res = rp.replay(list(rp.read_rows(f)), emit=lambda _l: None)
     assert res.auto_blocked == [] and res.dropped == 0
+
+
+# -- audit 6d94eb9 : plafond fixe, saturation, 75 %, inondation, tranches ---------
+
+
+def st(rate, t0, t1):
+    if rate == 0:
+        return []
+    return [t0 + k / rate for k in range(int(round((t1 - t0) * rate)))]
+
+
+def rep(seq, n=6):
+    out, t = [], 0.0
+    for _ in range(n):
+        for r, d in seq:
+            out += st(r, t, t + d)
+            t += d
+    return out
+
+
+def adv_cut(pkts, pps=80, sec=5.0, step=0.01):
+    """Même harnais que /tmp/adv3.py : évaluation toutes les 10 ms."""
+    m = SessionMonitor(pps, sec)
+    pkts = sorted(pkts)
+    i, t = 0, pkts[0]
+    while t <= pkts[-1] + 0.5:
+        while i < len(pkts) and pkts[i] <= t + 1e-9:
+            m.add_packet(PLAYER, 200, pkts[i])
+            i += 1
+        p = m.peers.get(PLAYER)
+        if p and m.sustained(p, t):
+            return t
+        t = round(t + step, 4)
+    return None
+
+
+ADV = [
+    ("L1 60/200", lambda: rep([(60, 1), (200, 1)]), 4.9, 5.2),
+    ("2s@250 puis silence", lambda: st(250, 0, 2), None, None),
+    ("79 stable", lambda: st(79, 0, 20), None, None),
+    ("80 stable", lambda: st(80, 0, 20), None, None),
+    ("81 pendant 4,8 s", lambda: st(81, 0, 4.8), None, None),
+    ("105 stable", lambda: st(105, 0, 20), 4.9, 5.1),
+    ("3s@300/2s@39", lambda: rep([(300, 3), (39, 2)]), 4.9, 5.2),
+    ("41/150", lambda: rep([(41, 1), (150, 1)]), 4.9, 5.3),
+    ("39/200", lambda: rep([(39, 1), (200, 1)]), 4.9, 5.3),
+    ("2s@39/3s@400", lambda: rep([(39, 2), (400, 3)]), 4.5, 5.0),
+    ("2s silence/3s@1000", lambda: rep([(0, 2), (1000, 3)]), 3.0, 3.4),
+    ("1.5s@39/1.5s@250", lambda: rep([(39, 1.5), (250, 1.5)]), 5.4, 5.8),
+    ("1.2s@30/0.8s@800", lambda: rep([(30, 1.2), (800, 0.8)], 10), 3.6, 4.0),
+    ("inondation 1500", lambda: st(1500, 0, 8), 0.7, 0.9),
+    ("inondation 5000", lambda: st(5000, 0, 8), 0.0, 1.0),
+    ("inondation 10000", lambda: st(10000, 0, 8), 0.0, 1.0),
+    ("F3 2s@1000 + 3s@39", lambda: st(1000, 0, 2) + st(39, 2, 5), 1.1, 1.3),
+    ("ralenti puis 81", lambda: [0.0] + st(81, 10, 20), 14.8, 15.1),
+    ("ralenti puis 300", lambda: [0.0] + st(300, 10, 20), 13.1, 13.3),
+    ("20 puis 300", lambda: st(20, 0, 10) + st(300, 10, 20), 13.0, 13.3),
+    ("79 puis 300", lambda: st(79, 0, 10) + st(300, 10, 20), 10.0, 10.1),
+    ("trou 2 s / 3 s@300", lambda: rep([(0, 2), (300, 3)], 8), 7.1, 7.3),
+    ("2.1s@39 / 2.9s@1000", lambda: rep([(39, 2.1), (1000, 2.9)], 8), 3.1, 3.4),
+]
+
+
+@pytest.mark.parametrize(("label", "make", "lo", "hi"), ADV, ids=[a[0] for a in ADV])
+def test_adv3_scenarios(label, make, lo, hi):
+    t = adv_cut(make())
+    if lo is None:
+        assert t is None, label
+    else:
+        assert t is not None and lo <= t <= hi, (label, t)
+
+
+@pytest.mark.parametrize("sec", [1, 1.4, 2, 2.5, 3])
+def test_short_shield_seconds_uses_three_slices(sec):
+    mon = SessionMonitor(80, sec)
+    assert mon.slices == 3
+    t = adv_cut(st(105, 0, 20), sec=sec)
+    assert t is not None and sec - 1e-6 <= t <= max(sec, 1.6)
+
+
+def test_slices_ceil():
+    assert SessionMonitor(80, 5.2).slices == 6
+    assert SessionMonitor(80, 60).slices == 60
+
+
+def test_cap_fixed_8192():
+    mon = SessionMonitor()
+    assert mon.rate_cap == an.RATE_CAP == 8192
+    for i in range(20_000):
+        mon.add_packet(PLAYER, 10, i / 20_000)
+    assert len(mon.peers[PLAYER].rate_ts) == 8192
+
+
+def test_saturation_needs_one_second():
+    mon = SessionMonitor(shield_pps=1000)  # F3 hors d'atteinte : 15000 paquets
+    for i in range(9000):
+        mon.add_packet(PLAYER, 10, i / 10_000)  # 10000 paquets/s pendant 0,9 s
+    peer = mon.peers[PLAYER]
+    assert not mon.sustained(peer, 0.9)  # saturé mais IP vue depuis < 1 s
+    for i in range(9000, 11000):
+        mon.add_packet(PLAYER, 10, i / 10_000)
+    assert mon.sustained(peer, 1.1)
+    assert not mon.sustained(peer, 2.5)  # dernier paquet il y a > 1 s
+
+
+def test_peak_2s_below_cap_not_cut():
+    # 2 s à 3000 paquets/s (6000 < 8192, < 3 x 400... F3 = 1200 dépassé) : F3 coupe ;
+    # sans F3 (seuil élevé), le plafond n'est pas saturé : pas de coupure.
+    rows = st(3000, 0, 2)
+    assert adv_cut(rows, pps=1000) is None
+
+
+FLOOD = Path(__file__).parent / "fixtures" / "flood.csv.gz"
+
+
+def test_replay_flood_5000_cut(tmp_path):
+    import gzip
+
+    plain = tmp_path / "flood.csv"
+    plain.write_bytes(gzip.decompress(FLOOD.read_bytes()))
+    cut = _cut_times(plain)
+    assert cut["198.51.100.50"] <= 1.0  # 5000 paquets/s pendant 8 s

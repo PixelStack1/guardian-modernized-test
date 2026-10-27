@@ -9,7 +9,9 @@ from guardian.network.anomaly import Level, PeerState, SessionMonitor
 
 
 def red_peer():
-    mon = SessionMonitor()
+    mon = SessionMonitor(
+        shield_pps=1000
+    )  # preuve de la règle x5, bouclier absolu isolé
     for k in range(61 * 30):
         mon.add_packet("203.0.113.10", 100, k / 30, port=6672)
         mon.add_packet("8.8.8.8", 100, k / 30, port=6672)
