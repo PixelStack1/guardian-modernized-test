@@ -84,3 +84,27 @@ def start_parent_watchdog(
     t = threading.Thread(target=run, name="parent-watchdog", daemon=True)
     t.start()
     return t
+
+
+_worker_watch_started = False
+
+
+def watch_worker_parent(
+    probe: Callable[[], Callable[[], bool] | None] = windows_parent_probe,
+    start: Callable[..., Any] = start_parent_watchdog,
+) -> bool:
+    """Capture workers (multiprocessing children holding a WinDivert handle):
+    exit when the GUI process that spawned them disappears (taskkill /F, crash),
+    so the handle closes and the driver can unload — fail-open, never an orphan
+    diverting traffic. No-op in the main process; idempotent."""
+    global _worker_watch_started
+    import multiprocessing
+
+    if _worker_watch_started or multiprocessing.parent_process() is None:
+        return False
+    alive = probe()
+    if alive is None:
+        return False
+    start(alive, lambda: None)
+    _worker_watch_started = True
+    return True

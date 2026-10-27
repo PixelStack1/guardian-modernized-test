@@ -198,3 +198,31 @@ def test_ci_banner_shown_in_probe_mode_and_i18n(win, tmp_path):
     assert w.ci_banner is not None
     assert w.ci_banner.text() == "MODE TEST CI — protection désactivée"
     assert STRINGS["gui.ci_banner"]["en"] == "CI TEST MODE — protection disabled"
+
+
+def test_worker_parent_watchdog_only_in_mp_children(monkeypatch):
+    import multiprocessing
+
+    from util import parentwatch
+
+    started = []
+    monkeypatch.setattr(parentwatch, "_worker_watch_started", False)
+    monkeypatch.setattr(multiprocessing, "parent_process", lambda: None)
+    assert not parentwatch.watch_worker_parent(lambda: lambda: True, started.append)
+    monkeypatch.setattr(multiprocessing, "parent_process", lambda: object())
+    assert not parentwatch.watch_worker_parent(
+        lambda: None, lambda *a: started.append(a)
+    )
+    assert parentwatch.watch_worker_parent(
+        lambda: lambda: True, lambda *a: started.append(a)
+    )
+    assert not parentwatch.watch_worker_parent(  # idempotent
+        lambda: lambda: True, lambda *a: started.append(a)
+    )
+    assert len(started) == 1
+
+
+def test_open_windivert_arms_worker_watchdog():
+    src = (ROOT / "guardian" / "network" / "sessions.py").read_text("utf-8")
+    body = src[src.index("def open_windivert") : src.index("def probe_filter")]
+    assert body.index("handle.open()") < body.index("watch_worker_parent()")
