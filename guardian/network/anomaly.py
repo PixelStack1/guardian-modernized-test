@@ -69,7 +69,8 @@ MAX_PEERS = 512
 MAX_PORTS_PER_PEER = 16
 
 # Règle absolue du bouclier (valeur validée par l'utilisateur) : une IP qui
-# soutient >= SHIELD_PPS paquets/s (fenêtre d'1 s) pendant >= SHIELD_SECONDS
+# soutient > SHIELD_PPS paquets/s (fenêtre glissante d'1 s) pendant SHIELD_SECONDS
+# consécutives
 # passe directement en rouge (« reason.rate »), même pendant l'apprentissage.
 # S'ajoute à la règle x5 / 100 paquets/s ci-dessus. Réglable dans data.json.
 SHIELD_PPS_KEY = "shield_pps"
@@ -78,6 +79,8 @@ SHIELD_PPS_MIN, SHIELD_PPS_MAX = 20, 1000
 SHIELD_SECONDS_KEY = "shield_seconds"
 SHIELD_SECONDS = 5.0
 SHIELD_SECONDS_MIN, SHIELD_SECONDS_MAX = 1.0, 60.0
+# Borne mémoire des horodatages de la fenêtre d'1 s, par pair.
+RATE_CAP = 2048
 # Tolérance flottante sur les bornes de fenêtre / durée.
 _EPS = 1e-6
 
@@ -238,30 +241,38 @@ class SessionMonitor:
             peer.tiny_run_size, peer.tiny_run_length = -1, 0
 
     def _track_rate(self, peer: PeerState, ts: float) -> None:
-        """Débit sur (ts - 1 s, ts] ; la période soutenue commence au plus ancien
-        paquet de la première fenêtre au-dessus du seuil."""
+        """Débit glissant sur (ts - 1 s, ts]. La période soutenue commence au PREMIER
+        paquet où ce débit dépasse STRICTEMENT shield_pps (jamais au début de la
+        fenêtre : les paquets d'une phase lente ne comptent pas dans la durée) et
+        s'arrête dès qu'il repasse à <= shield_pps. Mémoire bornée (RATE_CAP)."""
         q = peer.rate_ts
         q.append(ts)
         limit = ts - 1.0 + _EPS
         while q and q[0] <= limit:
             q.popleft()
-        while len(q) > 2 * self.shield_pps:  # borne mémoire
+        while len(q) > RATE_CAP:  # borne mémoire (au-delà, débit affiché >= RATE_CAP)
             q.popleft()
-        if len(q) >= self.shield_pps:
+        if len(q) > self.shield_pps:
             if peer.sustain_since is None:
-                peer.sustain_since = q[0]
+                peer.sustain_since = ts
         else:
             peer.sustain_since = None
 
+    @staticmethod
+    def rate(peer: PeerState, now: float) -> int:
+        """Paquets sur (now - 1 s, now] (réel, sauf au-delà de RATE_CAP)."""
+        limit = now - 1.0 + _EPS
+        return sum(1 for ts in peer.rate_ts if limit < ts <= now + _EPS)
+
     def sustained(self, peer: PeerState, now: float) -> bool:
-        """Vrai si le pair soutient >= shield_pps depuis >= shield_seconds."""
+        """Vrai si le débit d'1 s est > shield_pps sans interruption depuis au moins
+        shield_seconds (exactement, jamais avant) et l'est encore à ``now``."""
         since = peer.sustain_since
         if since is None or not peer.rate_ts:
             return False
-        last = peer.rate_ts[-1]
-        if now - last >= 1.0:  # silencieux depuis : plus soutenu
+        if self.rate(peer, now) <= self.shield_pps:
             return False
-        return last - since >= self.shield_seconds - _EPS
+        return peer.rate_ts[-1] - since >= self.shield_seconds - _EPS
 
     def _make_room(self, now: float) -> bool:
         """Libère une place en oubliant le pair vu le moins récemment s'il est inactif."""
@@ -347,7 +358,7 @@ class SessionMonitor:
                     0,
                     t(
                         "anomaly.rate",
-                        pps=len(peer.rate_ts),
+                        pps=self.rate(peer, now),
                         max=self.shield_pps,
                         seconds=self.shield_seconds,
                     ),

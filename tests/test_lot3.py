@@ -574,8 +574,9 @@ def test_shield_settings_clamped():
     ("pps", "seconds", "red"),
     [
         (79, 30, False),
-        (81, 5.0, True),
-        (81, 4.9, False),
+        (81, 6.0, True),  # débit > 80 dès ~0,99 s, puis 5 s pile
+        (81, 5.9, False),
+        (80, 30, False),  # strictement supérieur
         (90, 8, True),
         (90, 4.9, False),
         (120, 10, True),
@@ -604,8 +605,8 @@ def test_shield_silence_is_not_sustained():
     mon = SessionMonitor()
     for ts, ip, size, _ in burst(PLAYER, 90, 6):
         mon.add_packet(ip, size, ts)
-    assert mon.sustained(mon.peers[PLAYER], 6.5)
-    assert not mon.sustained(mon.peers[PLAYER], 7.0)
+    assert mon.sustained(mon.peers[PLAYER], 6.0)
+    assert not mon.sustained(mon.peers[PLAYER], 6.5)  # débit retombé sous 80
 
 
 @given(st.lists(st.floats(0, 100, allow_nan=False), max_size=400))
@@ -629,8 +630,8 @@ def _replay(rows, **kw):
         (120, 10, True),
         (79, 20, False),
         (90, 4.9, False),
-        (81, 5.0, True),
-        (81, 4.9, False),
+        (81, 6.0, True),
+        (81, 5.9, False),
     ],
 )
 def test_replay_shield_cut(pps, seconds, cut):
@@ -700,3 +701,83 @@ def test_qa_files_replay():
                 list(rp.read_rows(f)), emit=lambda _l: None, auto_block=True
             )
         assert set(res.auto_blocked) == cut
+
+
+# -- règle absolue : instant exact de coupure (débit d'1 s > seuil, 5 s pile) ------
+
+
+def first_red(rows, **kw):
+    """Horodatage de la 1re évaluation rouge (évaluée après chaque paquet)."""
+    mon = SessionMonitor(**kw)
+    for ts, ip, size, _in in sorted(rows):
+        mon.add_packet(ip, size, ts)
+        p = {q.ip: q for q in mon.evaluate(ts)}.get(PLAYER)
+        if p is not None and p.level == Level.SUSPECT:
+            return ts
+    return None
+
+
+def test_cut_81_from_first_second_at_5s_after_rate_established():
+    t = first_red(burst(PLAYER, 81, 10))
+    above = 80 / 81  # 81e paquet : débit d'1 s = 81 > 80
+    assert t is not None and above + 5 - 1e-6 <= t < above + 5 + 1 / 81 + 1e-6
+
+
+def test_cut_ramp_30_to_81_counts_only_fast_phase():
+    rows = burst(PLAYER, 30, 20) + burst(PLAYER, 81, 6, start=20.0)[1:]
+    t = first_red(rows)
+    assert t is not None and t >= 25.0
+    assert t <= 26.0 + 1e-6
+
+
+def test_cut_70_to_81_never_before_5s():
+    rows = burst(PLAYER, 70, 20) + burst(PLAYER, 81, 10, start=20.0)[1:]
+    t = first_red(rows)
+    assert t is not None and t >= 25.0
+
+
+def test_79_stable_never_cut():
+    assert first_red(burst(PLAYER, 79, 60)) is None
+
+
+def test_intermittent_resets_period():
+    rows = []
+    for k in range(8):  # 3 s au-dessus, 1 s en dessous, x8
+        rows += burst(PLAYER, 90, 2.99, start=4.0 * k)
+        rows += burst(PLAYER, 30, 0.99, start=4.0 * k + 3.0)
+    assert first_red(rows) is None
+
+
+def test_alert_shows_real_rate_not_capped():
+    mon = SessionMonitor()
+    for ts, ip, size, _ in burst(PLAYER, 400, 6):
+        mon.add_packet(ip, size, ts)
+    p = {q.ip: q for q in mon.evaluate(6.0)}[PLAYER]
+    assert p.level == Level.SUSPECT and "400" in p.alert
+    assert len(mon.peers[PLAYER].rate_ts) <= an.RATE_CAP
+
+
+def test_rate_memory_bounded():
+    mon = SessionMonitor()
+    for i in range(10_000):
+        mon.add_packet(PLAYER, 10, i / 10_000)
+    assert len(mon.peers[PLAYER].rate_ts) == an.RATE_CAP
+
+
+EARLY = Path(__file__).parent / "fixtures" / "early_lot3.csv"
+
+
+def test_replay_early_fixture_cut_at_5s_of_fast_phase():
+    lines = []
+    with EARLY.open(newline="", encoding="utf-8") as f:
+        res = rp.replay(list(rp.read_rows(f)), emit=lines.append, auto_block=True)
+    assert "198.51.100.5" in res.auto_blocked
+    cut = [ln for ln in lines if "198.51.100.5 bloqu" in ln]
+    ts = float(cut[0][1 : cut[0].index("]")]) - 1767225600
+    assert 25.0 <= ts <= 26.1  # phase rapide à partir de 20 s : jamais avant 25 s
+
+
+def test_replay_early_fixture_respects_toggle():
+    with EARLY.open(newline="", encoding="utf-8") as f:
+        res = rp.replay(list(rp.read_rows(f)), emit=lambda _l: None)
+    assert res.auto_blocked == [] and res.dropped == 0
