@@ -130,16 +130,14 @@ if __name__ == "__main__":
 
         _pw.watch_spawn_parent(sys.argv, on_parent_exit=_orphan)
         _pw.install_ci_thread_hook()
+    # Enfant dont l'amorçage échoue (parent tué) : journal + os._exit(1), sans boîte
+    # du chargeur ; GUI et helper démarré : inchangés (util.parentwatch).
     try:
+        from util.parentwatch import run_freeze_support as _run_freeze
+    except Exception:
         freeze_support()
-    except BaseException as _exc:
-        # Diagnostic CI (inerte sinon) : traceback complet de l'enfant, puis relance.
-        if not (isinstance(_exc, SystemExit) and _exc.code in (0, None)):
-            with contextlib.suppress(Exception):
-                from util import parentwatch as _pwc
-
-                _pwc.ci_traceback("multiprocessing child (freeze_support)")
-        raise
+    else:
+        _run_freeze(freeze_support, sys.argv)
     # Audit R1/R3 : APRÈS freeze_support (un enfant multiprocessing y est aiguillé et
     # n'atteint jamais ce point : il garde l'état transmis par la GUI). Le processus
     # principal n'hérite jamais d'un état CI/pilote venu de l'extérieur.

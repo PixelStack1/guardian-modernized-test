@@ -375,8 +375,9 @@ def armed_target(
         if isinstance(exc, SystemExit) and isinstance(exc.code, int | None):
             raise
         ci_traceback(f"target {purpose}")  # diagnostic CI seulement
-        if _orphan_requested():
-            # GUI disparue : WinDivertShutdown a interrompu la lecture, attendu.
+        if is_shutdown_read_error(exc) and _orphan_requested_recently():
+            # GUI disparue : WinDivertShutdown (demandé juste avant) a interrompu la
+            # lecture -> WinError 232, attendu. Toute autre erreur : journalisée.
             logging.getLogger("debugger").info(
                 "%s: capture stopped after GUI exit (%s)", purpose, type(exc).__name__
             )
@@ -388,6 +389,28 @@ def armed_target(
     finally:
         if _orphan_requested():
             _wait_orphan(WORKER_CLEANUP_S)  # fermeture de NOTRE handle terminée
+
+
+ERROR_NO_DATA = 232  # « The pipe is being closed » : recv après WinDivertShutdown
+
+
+def is_shutdown_read_error(exc: BaseException) -> bool:
+    """Erreur de lecture WinDivert attendue après WinDivertShutdown (WinError 232)."""
+    if not isinstance(exc, OSError):
+        return False
+    code = getattr(exc, "winerror", None)
+    if code is None:  # hors Windows (tests) : errno porte le code
+        code = exc.errno
+    return code == ERROR_NO_DATA
+
+
+def _orphan_requested_recently() -> bool:
+    try:
+        from util.driver import orphan_shutdown_requested_within
+
+        return orphan_shutdown_requested_within()
+    except Exception:
+        return False
 
 
 def _orphan_requested() -> bool:
@@ -448,6 +471,54 @@ def start_driver_sentinel(timeout: float = 15.0) -> Any:
     except Exception:
         logging.getLogger("debugger").exception("driver sentinel failed")
         return None
+
+
+# -- point d'entrée des enfants multiprocessing (exe fenêtré) ----------------------
+FORK_FLAG = "--multiprocessing-fork"
+
+
+def _helper_started() -> bool:
+    """La cible Process a démarré (``_bootstrap`` a remplacé le processus courant) :
+    ce n'est plus l'amorçage spawn_main."""
+    try:
+        import multiprocessing
+
+        # _bootstrap fixe le parent : None dans la GUI et pendant spawn_main.
+        return multiprocessing.parent_process() is not None
+    except Exception:
+        return True  # doute : ne jamais forcer la sortie d'un helper démarré
+
+
+def run_freeze_support(
+    freeze: Callable[[], object],
+    argv: list[str],
+    hard_exit: Callable[[int], object] = os._exit,
+    started: Callable[[], bool] = _helper_started,
+) -> None:
+    """``freeze_support`` sans boîte « Unhandled exception in script ».
+
+    Seul un enfant ``--multiprocessing-fork`` dont l'amorçage (spawn_main : lecture
+    du pipe, DuplicateHandle du parent…) échoue est concerné, p. ex. WinError 5 quand
+    la GUI parente vient d'être tuée : traceback dans ci-crash.log (sonde CI
+    uniquement), journal discret sinon, puis ``os._exit(1)`` sans relancer. La GUI
+    et un helper déjà démarré gardent le comportement normal (exception relancée).
+    SystemExit à code entier/None (sortie normale de l'enfant) : toujours transmis."""
+    try:
+        freeze()
+    except BaseException as exc:
+        if isinstance(exc, SystemExit) and isinstance(exc.code, int | None):
+            raise
+        ci_traceback("multiprocessing child (freeze_support)")
+        if FORK_FLAG not in argv or started():
+            raise
+        with contextlib.suppress(Exception):
+            logging.getLogger("debugger").info(
+                "multiprocessing child bootstrap failed, exit 1 (parent gone?): %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            logging.shutdown()
+        hard_exit(1)
 
 
 auto_arm()

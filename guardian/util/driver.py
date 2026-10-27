@@ -165,10 +165,22 @@ def untrack_handle(handle: Any) -> bool:
 # fil de capture après WinDivertShutdown est alors attendue (pas un plantage).
 _orphan_requested = threading.Event()
 _orphan_done = threading.Event()
+_orphan_requested_at = [0.0]  # time.monotonic() de la demande (0 : jamais)
+ORPHAN_READ_ERROR_WINDOW_S = 10.0  # « juste avant » : erreur de lecture attendue
 
 
 def orphan_shutdown_requested() -> bool:
     return _orphan_requested.is_set()
+
+
+def orphan_shutdown_requested_within(
+    window: float = ORPHAN_READ_ERROR_WINDOW_S,
+) -> bool:
+    """Nettoyage orphelin demandé il y a au plus ``window`` s (et réellement demandé)."""
+    import time
+
+    at = _orphan_requested_at[0]
+    return _orphan_requested.is_set() and at > 0 and time.monotonic() - at <= window
 
 
 def wait_orphan_cleanup(timeout: float) -> bool:
@@ -242,6 +254,9 @@ def orphan_cleanup(windivert: Any = None) -> list[str]:
     import os
 
     steps: list[str] = []
+    import time as _time
+
+    _orphan_requested_at[0] = _time.monotonic()
     _orphan_requested.set()
     try:
         with _handles_lock:  # idempotent : un seul appel concurrent ferme chaque handle
