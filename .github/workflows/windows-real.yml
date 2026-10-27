@@ -89,6 +89,18 @@ jobs:
           if ($p.ExitCode -ne 0) { exit 1 }
           "OK: WinDivert not running after Guardian exit" | Tee-Object -Append logs/exe_exit_driver.txt
           exit 0  # sc.exe query leaves $LASTEXITCODE=1060 when the service is absent (= success here)
+      - name: Lot 8 acceptance on the onefile exe (dry probe, no packet sent)
+        # tests/windows/acceptance.py — see docs/ci-acceptance.md. The exe runs with
+        # --ci-probe: WinDivert filter "false" (nothing captured, nothing re-sent).
+        # Covers: taskkill /F child + parent, WM_CLOSE, cancelled logoff, hotkeys
+        # (RegisterHotKey x5, WM_HOTKEY, real SendInput AltGr/Ctrl+Alt+F12),
+        # SHA256 shown == artifact, startup-to-splash time. Kills only its own PIDs.
+        if: always()
+        timeout-minutes: 12
+        run: |
+          $exe = Get-ChildItem dist/Guardian-*.exe | Select-Object -First 1
+          poetry run python tests/windows/acceptance.py --exe $exe.FullName --out logs/acceptance 2>&1 | Tee-Object logs/acceptance.txt
+          exit $LASTEXITCODE
       - name: SHA256SUMS of the exe
         if: always()
         run: |
