@@ -30,3 +30,8 @@
 - Serveurs Rockstar reconnus et affichés à part, jamais comptés ni bloqués.
 - `[R]etour` garde la protection active en arrière-plan, `[Q]` l'arrête.
 - Mode enregistrement (métadonnées seulement), langue FR/EN, session publique en hôte au départ.
+
+## Lot 5 — Interface graphique (PySide6)
+- Fenêtre native PySide6 par défaut (sans console) ; `--console` garde l'interface texte.
+- Toutes les touches de la vue en direct accessibles (boutons + raccourcis identiques), réglages data.json éditables.
+- La GUI lit un instantané via QTimer (500 ms) ; la capture WinDivert reste dans son processus.

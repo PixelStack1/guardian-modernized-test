@@ -14,6 +14,31 @@ def build() -> None:
             "--icon",
             "logo.ico",
             "--uac-admin",
+            # Lot 5 : interface PySide6 fenêtrée (pas de console ; --console en ouvre une).
+            "--windowed",
+            "--collect-submodules",
+            "gui",
+            "--hidden-import",
+            "PySide6.QtCore",
+            "--hidden-import",
+            "PySide6.QtGui",
+            "--hidden-import",
+            "PySide6.QtWidgets",
+            # Modules Qt inutiles exclus (taille de l'exe).
+            *(
+                arg
+                for mod in (
+                    "QtWebEngineCore",
+                    "QtWebEngineWidgets",
+                    "Qt3DCore",
+                    "QtQml",
+                    "QtQuick",
+                    "QtMultimedia",
+                    "QtNetwork",
+                    "QtPdf",
+                )
+                for arg in ("--exclude-module", f"PySide6.{mod}")
+            ),
             "--name",
             f"Guardian-{version}",
             "--version-file",
