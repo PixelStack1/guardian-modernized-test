@@ -57,9 +57,12 @@ sends packets.
   min 3) each above **75 %** of the limit, and the IP seen for at least `shield_seconds`. It is also
   cut on a **flood** (average above 3x the limit) or when its 8192-timestamp memory fills up after
   at least 1 s. A short dip does not reset the count. A burst starting from a low rate is cut after
-  **about 4 s at least** (3 to 5 s); an IP already at 79-80 pkt/s that ramps up may be cut faster,
+  after a **minimum delay of 3 s**; an IP already at 79-80 pkt/s that ramps up may be cut faster,
   by design; a very strong flood is cut too. Friends, the whitelist, Rockstar/Take-Two and Azure
   are never cut.
+  ⚠️ **Known limit**: 3 s of silence then 2 s at 300 pkt/s, in a loop, does not trigger a cut
+  (only 2 of 5 slices busy, fewer than 1200 packets in 5 s). The rate alert (above 60 pkt/s by
+  default) still flags it.
 - **Total block** (off by default, `T`): when an IP is blocked, also cuts **outgoing** traffic to
   it for **10 minutes**. ⚠️ **Not a guaranteed kick**; if that player is host, you may be the one
   who leaves.
@@ -297,11 +300,15 @@ pas l'hôte** (l'hôte ne change que s'il quitte la session).
     remplit pas).
 
   Une petite baisse ponctuelle ne remet pas le compteur à zéro. Une rafale partant d'un débit bas
-  est coupée au bout d'**environ 4 s au minimum** (3 à 5 s selon sa force). Une IP déjà à 79-80
+  est coupée avec un **délai minimal de 3 s**. Une IP déjà à 79-80
   paquets/s qui s'emballe peut être coupée **plus vite**, presque immédiatement : c'est voulu, sa
   moyenne sur 5 s dépasse déjà la limite. Une **inondation très forte** (plus de 1200 paquets en
   5 s) est coupée elle aussi, en général en moins de 1,5 s. Jamais pour les amis, la liste
   blanche, Rockstar/Take-Two ou Azure.
+
+  ⚠️ **Limite connue** : 3 s de silence puis 2 s à 300 paquets/s, en boucle, ne déclenche pas la
+  coupure (seulement 2 tranches occupées sur 5, et moins de 1200 paquets en 5 s). L'alerte de débit
+  (au-delà de 60 paquets/s par défaut) le signale quand même.
 - **Bouclier manuel** (`B`) : bloque n'importe quelle IP choisie et l'écrit **de façon permanente**
   dans la liste noire de `data.json` (avec date et pseudo) ; `D` pour débloquer (retire aussi
   l'IP de la liste noire, ou de `auto_block.json` pour un blocage auto).
