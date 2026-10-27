@@ -22,6 +22,7 @@ from util.driver import (
     DriverStartTimeout,
     call_bounded,
     mark_owned,
+    service_state,
     wait_running,
 )
 from util.i18n import t
@@ -182,6 +183,9 @@ if __name__ == "__main__":
         from util import parentwatch as _pwatch
 
         sentinel_owned = _pwatch.start_driver_sentinel()
+        # Audit R1 : état AVANT chargement ; s'il était absent, un service créé par
+        # un chargement interrompu est le nôtre (sentinelle owned=1 avant la sortie).
+        state_before_start = service_state()
         start_driver: Callable[[], object] = lambda: driver.start()  # noqa: E731
         if cimode.fault() == cimode.FAULT_DRIVER_BLOCKED:
             # Banc CI seulement : chargement qui ne rend jamais la main (-> 6).
@@ -192,6 +196,9 @@ if __name__ == "__main__":
             # le démarrage en silence.
             call_bounded(start_driver, DRIVER_START_TIMEOUT_S, "driver start")
         except DriverStartTimeout as e:
+            if state_before_start == "ABSENT" and sentinel_owned is not None:
+                with contextlib.suppress(Exception):
+                    sentinel_owned.value = 1  # la sentinelle retirera le service
             notify(t("main.driver_timeout", e=e))
             logger.error("WinDivert driver start timed out: %s", e)
             os._exit(

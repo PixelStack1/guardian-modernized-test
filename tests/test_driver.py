@@ -262,3 +262,23 @@ def test_main_ci_faults_wired_to_exit_5_and_6():
         < src.index("wait_running(DRIVER_RUNNING_TIMEOUT_S)")
         < src.index("sys.exit(5)")
     )
+
+
+def test_r1_driver_start_timeout_marks_sentinel_owned_when_service_was_absent():
+    """Audit R1 : état lu AVANT driver.start ; s'il était ABSENT, la sentinelle est
+    marquée propriétaire (owned=1) AVANT os._exit(6)."""
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "guardian" / "__main__.py").read_text(
+        "utf-8"
+    )
+    before = src.index("state_before_start = service_state()")
+    assert before < src.index("call_bounded(start_driver, DRIVER_START_TIMEOUT_S")
+    timeout = src.index("except DriverStartTimeout as e:", before)
+    owned = src.index("sentinel_owned.value = 1", timeout)
+    assert 'state_before_start == "ABSENT"' in src[timeout:owned]
+    exit6 = re.compile(r"os\._exit\(\s*6\s*\)").search(src, timeout)
+    assert exit6 and owned < exit6.start()
+    # ce bloc précède la première sortie 6 (chargement du pilote)
+    assert src.index("except DriverStartTimeout as e:") == timeout
