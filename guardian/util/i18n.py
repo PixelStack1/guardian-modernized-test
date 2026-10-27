@@ -380,6 +380,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "fr": "Verrou refusé : liste des IP vues pleine ({max}), il serait inefficace",
         "en": "Lock refused: seen-IP list full ({max}), it would be ineffective",
     },
+    "anomaly.rate": {
+        "fr": "débit soutenu {pps} paquets/s >= {max} pendant {seconds:g} s",
+        "en": "sustained rate {pps} pkt/s >= {max} for {seconds:g}s",
+    },
+    "reason.rate": {"fr": "débit soutenu", "en": "sustained rate"},
     "reason.vpn": {"fr": "VPN/hébergeur", "en": "VPN/hosting"},
     "live.ev.panic_toggled": {
         "fr": "Bouton panique : {state}",

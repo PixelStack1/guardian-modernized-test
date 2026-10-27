@@ -757,7 +757,7 @@ class LiveSessionController:
 
     def vpn_block(self, ip: str) -> bool:
         """Blocage auto d'un VPN/hébergeur (réglage vpn_auto_block, OFF par défaut).
-        Mêmes garde-fous que le bouclier auto + jamais un ami, un serveur Rockstar
+        Exige le bouclier auto ACTIVÉ. Mêmes garde-fous + jamais un ami, un serveur Rockstar
         ni une IP d'un pays de confiance. 7 jours (auto_block.json)."""
         try:
             if (
@@ -780,12 +780,8 @@ class LiveSessionController:
             peer = PeerState(ip=ip, first_seen=self.clock(), last_seen=self.clock())
             peer.level = Level.SUSPECT
             peer.reason_key = "reason.vpn"
-            saved = self.auto_block
-            self.auto_block = True
-            try:
-                return self.auto_block_if_needed(peer)
-            finally:
-                self.auto_block = saved
+            # R3 : respecte le bouclier auto (jamais forcé).
+            return self.auto_block_if_needed(peer)
         except Exception:
             return False
 
@@ -1823,10 +1819,13 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
     from config.globallist import Whitelist
     from menu.menu import Menu  # import tardif : menu.py importe ce module
     from network import autoblock
+    from network.anomaly import SHIELD_PPS_KEY, SHIELD_SECONDS_KEY
     from network.incident import ReportWriter, build_report
     from network.offenders import OffenderStore
 
-    monitor = SessionMonitor()
+    monitor = SessionMonitor(
+        config.data.get(SHIELD_PPS_KEY), config.data.get(SHIELD_SECONDS_KEY)
+    )
     player_counter = PlayerCounter()
     writer = ReportWriter()
 

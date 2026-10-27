@@ -99,6 +99,7 @@ class ReplayResult:
     dropped_panic: Counter[str] = field(default_factory=Counter)
     offender_alerts: list[str] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
+    auto_blocked: list[str] = field(default_factory=list)  # bouclier auto
     flags: list[tuple[str, str]] = field(default_factory=list)  # (clé, ip), lot 3
 
 
@@ -161,7 +162,10 @@ def replay(
         offenders=ctrl.offender_ips, offender_drop=offender_drop, friends=ctrl.friends
     )
     start: float | None = None
-    monitor = SessionMonitor()
+    from network.anomaly import SHIELD_PPS_KEY, SHIELD_SECONDS_KEY
+
+    cfg = settings or {}
+    monitor = SessionMonitor(cfg.get(SHIELD_PPS_KEY), cfg.get(SHIELD_SECONDS_KEY))
     tracker = NewPlayerTracker(
         ls.is_rockstar_server,
         journal,
@@ -247,6 +251,12 @@ def replay(
                 )
             res.dropped += 1
             res.dropped_by_ip[ip] += 1
+    # Évaluation finale (le dernier paquet peut tomber entre deux évaluations).
+    if start is not None:
+        for peer in monitor.evaluate(now_box[0]):
+            ctrl.auto_block_if_needed(peer)
+        flush_events()
+    res.auto_blocked = sorted(ctrl.auto_entries)
     emit(
         t(
             "replay.summary",

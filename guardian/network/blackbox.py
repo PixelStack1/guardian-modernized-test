@@ -360,7 +360,6 @@ def rotate(directory: Path, max_files: int) -> list[Path]:
         with contextlib.suppress(OSError):
             if tmp.stat().st_mtime < limit:
                 tmp.unlink()
-                removed.append(tmp)
     for path in removed:
         with contextlib.suppress(OSError):
             path.unlink()

@@ -317,6 +317,18 @@ EN: alert + log line per new IP; bounded to **~4 MB on disk** (1 MB × 4 files).
 rejoue un enregistrement sans WinDivert et affiche les décisions. Les tests tournent aussi sans
 `pydivert` installé (faux module minimal dans `tests/_fakes`, chargé seulement si besoin).
 
+## Données hors ligne / Offline data
+
+Aucun appel réseau à l'exécution. / No network calls at runtime.
+
+- Pays / Country : `guardian/util/geoip_ipv4.bin.gz` — sapics/ip-location-db
+  « geo-whois-asn-country », **CC0-1.0** (https://github.com/sapics/ip-location-db).
+- VPN / hébergeurs / hosting : `guardian/util/vpn_ipv4.bin.gz` — sapics/ip-location-db
+  « origin-asn », **PDDL-1.0**, instantané du 2026-10-27 (`util/vpn.py` : `SNAPSHOT`),
+  liste d'AS dans `tools/build_vpn.py`. Indicatif seulement / indicative only.
+
+Textes des licences / license texts : [`data-licenses/`](data-licenses/).
+
 ## Langue / Language
 
 Menu principal → *Langue* : Français (par défaut) ou English. Réglage `"language": "fr"` / `"en"`

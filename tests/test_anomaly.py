@@ -88,7 +88,8 @@ def test_monitor_never_crashes(events):
 
 
 def test_no_alert_during_learning_or_steady():
-    mon = SessionMonitor()
+    # Règle x5 seule : la règle absolue du lot 3 (shield_pps) est mise au maximum.
+    mon = SessionMonitor(shield_pps=1000)
     feed(mon, "203.0.113.1", 500, 0, 10)  # gros débit mais en apprentissage
     assert all(p.level == Level.NORMAL for p in mon.evaluate(10))
     mon = SessionMonitor()

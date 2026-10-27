@@ -68,6 +68,37 @@ MAX_PEERS = 512
 # Nombre maximal de ports sources mémorisés par pair (rapport d'incident).
 MAX_PORTS_PER_PEER = 16
 
+# Règle absolue du bouclier (valeur validée par l'utilisateur) : une IP qui
+# soutient >= SHIELD_PPS paquets/s (fenêtre d'1 s) pendant >= SHIELD_SECONDS
+# passe directement en rouge (« reason.rate »), même pendant l'apprentissage.
+# S'ajoute à la règle x5 / 100 paquets/s ci-dessus. Réglable dans data.json.
+SHIELD_PPS_KEY = "shield_pps"
+SHIELD_PPS = 80
+SHIELD_PPS_MIN, SHIELD_PPS_MAX = 20, 1000
+SHIELD_SECONDS_KEY = "shield_seconds"
+SHIELD_SECONDS = 5.0
+SHIELD_SECONDS_MIN, SHIELD_SECONDS_MAX = 1.0, 60.0
+# Tolérance flottante sur les bornes de fenêtre / durée.
+_EPS = 1e-6
+
+
+def _clamp(raw: object, default: float, lo: float, hi: float) -> float:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return default
+    v = float(raw)
+    if v != v or v in (float("inf"), float("-inf")):
+        return default
+    return max(lo, min(hi, v))
+
+
+def clamp_shield_pps(raw: object) -> int:
+    return int(_clamp(raw, SHIELD_PPS, SHIELD_PPS_MIN, SHIELD_PPS_MAX))
+
+
+def clamp_shield_seconds(raw: object) -> float:
+    return _clamp(raw, SHIELD_SECONDS, SHIELD_SECONDS_MIN, SHIELD_SECONDS_MAX)
+
+
 # Un pair est « connecté » s'il a envoyé un paquet dans ce délai (cf. ConnectionStats).
 CONNECTED_SECONDS = 5.0
 
@@ -154,6 +185,10 @@ class PeerState:
     total_bytes: int = 0
     peak_pps: float = 0.0
     ports: set[int] = field(default_factory=set)
+    # Règle absolue : horodatages de la dernière seconde et début de la période
+    # où le débit d'1 s est resté >= shield_pps (None = sous le seuil).
+    rate_ts: deque[float] = field(default_factory=deque)
+    sustain_since: float | None = None
 
     def learning(self, now: float) -> bool:
         return now - self.first_seen < BASELINE_SECONDS
@@ -162,8 +197,12 @@ class PeerState:
 class SessionMonitor:
     """Suit tous les pairs et calcule leur niveau d'anomalie."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self, shield_pps: object = SHIELD_PPS, shield_seconds: object = SHIELD_SECONDS
+    ) -> None:
         self.peers: dict[str, PeerState] = {}
+        self.shield_pps = clamp_shield_pps(shield_pps)
+        self.shield_seconds = clamp_shield_seconds(shield_seconds)
 
     # -- alimentation ----------------------------------------------------
     def add_packet(
@@ -183,6 +222,7 @@ class SessionMonitor:
         if port is not None and len(peer.ports) < MAX_PORTS_PER_PEER:
             peer.ports.add(int(port))
         peer.window.add(ts, size)
+        self._track_rate(peer, ts)
         peer.max_size_ever = max(peer.max_size_ever, size)
         if peer.learning(ts):
             bucket = int(ts - peer.first_seen)
@@ -196,6 +236,32 @@ class SessionMonitor:
                 peer.tiny_run_size, peer.tiny_run_length = size, 1
         else:
             peer.tiny_run_size, peer.tiny_run_length = -1, 0
+
+    def _track_rate(self, peer: PeerState, ts: float) -> None:
+        """Débit sur (ts - 1 s, ts] ; la période soutenue commence au plus ancien
+        paquet de la première fenêtre au-dessus du seuil."""
+        q = peer.rate_ts
+        q.append(ts)
+        limit = ts - 1.0 + _EPS
+        while q and q[0] <= limit:
+            q.popleft()
+        while len(q) > 2 * self.shield_pps:  # borne mémoire
+            q.popleft()
+        if len(q) >= self.shield_pps:
+            if peer.sustain_since is None:
+                peer.sustain_since = q[0]
+        else:
+            peer.sustain_since = None
+
+    def sustained(self, peer: PeerState, now: float) -> bool:
+        """Vrai si le pair soutient >= shield_pps depuis >= shield_seconds."""
+        since = peer.sustain_since
+        if since is None or not peer.rate_ts:
+            return False
+        last = peer.rate_ts[-1]
+        if now - last >= 1.0:  # silencieux depuis : plus soutenu
+            return False
+        return last - since >= self.shield_seconds - _EPS
 
     def _make_room(self, now: float) -> bool:
         """Libère une place en oubliant le pair vu le moins récemment s'il est inactif."""
@@ -275,6 +341,19 @@ class SessionMonitor:
                     )
                     keys.append("reason.burst")
                     severe = ratio >= BURST_RATIO_SEVERE
+
+            if self.sustained(peer, now):
+                reasons.insert(
+                    0,
+                    t(
+                        "anomaly.rate",
+                        pps=len(peer.rate_ts),
+                        max=self.shield_pps,
+                        seconds=self.shield_seconds,
+                    ),
+                )
+                keys.insert(0, "reason.rate")
+                severe = True
 
             if not top:
                 others_max = 0

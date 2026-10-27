@@ -250,14 +250,23 @@ def test_vpn_flag_can_be_disabled():
 
 def test_vpn_auto_block_guards():
     settings = fl.FilterSettings(vpn_auto_block=True)
-    c, _ = ctrl(filters=fl.PeerFilters(settings), friends={"203.0.113.7": "a"})
+    c, _ = ctrl(
+        filters=fl.PeerFilters(settings), friends={"203.0.113.7": "a"}, auto_block=True
+    )
     assert c.vpn_block(AU_VPN) is True and ls.is_blocked(c.blocked, AU_VPN, 1000.0)
     assert c.vpn_block(FR_VPN) is False  # pays de confiance
     assert c.vpn_block(ROCKSTAR) is False
     c.friends[AU_VPN] = "ami"
     c.blocked.clear()
     assert c.vpn_block(AU_VPN) is False  # ami
-    assert c.auto_block is False  # réglage du bouclier inchangé
+    assert c.auto_block is True  # réglage du bouclier inchangé
+
+
+def test_r3_vpn_block_requires_auto_block():
+    c, _ = ctrl(filters=fl.PeerFilters(fl.FilterSettings(vpn_auto_block=True)))
+    assert c.auto_block is False
+    assert c.vpn_block(AU_VPN) is False and AU_VPN not in c.blocked
+    assert c.auto_block is False
 
 
 def test_vpn_block_unavailable_without_ranges():
@@ -508,10 +517,15 @@ def test_replay_fixture_vpn_block_and_friend():
         emit=lambda _l: None,
         filters=True,
         vpn_block=True,
+        auto_block=True,
         friends={AU_VPN: "ami"},
     )
     assert res.dropped == 0  # seul VPN non-confiance = ami ; FR_VPN = confiance
     res = rp.replay(_rows(), emit=lambda _l: None, filters=True, vpn_block=True)
+    assert res.dropped == 0  # bouclier auto désactivé : jamais de blocage VPN
+    res = rp.replay(
+        _rows(), emit=lambda _l: None, filters=True, vpn_block=True, auto_block=True
+    )
     assert res.dropped_by_ip[AU_VPN] > 0 and res.dropped_by_ip[FR_VPN] == 0
     assert res.dropped_by_ip[ROCKSTAR] == 0 and res.dropped_by_ip[FR] == 0
 
@@ -524,3 +538,165 @@ def test_replay_default_has_no_lot3_flags():
 def test_replay_cli_flags(capsys):
     assert rp.main([str(FIXTURE), "--filtres"]) == 0
     assert "VPN" in capsys.readouterr().out
+
+
+# -- bouclier : règle absolue 80 paquets/s pendant 5 s ---------------------------
+
+from network import anomaly as an  # noqa: E402
+from network.anomaly import Level, SessionMonitor  # noqa: E402
+
+PLAYER = "203.0.113.80"
+QA = Path("/workspace/guardian-qa")
+
+
+def burst(ip, pps, seconds, start=0.0):
+    """Paquets réguliers couvrant exactement ``seconds`` (premier à start)."""
+    n = int(round(seconds * pps, 6)) + 1
+    return [(start + i / pps, ip, 200, True) for i in range(n)]
+
+
+def level_after(rows, **kw):
+    mon = SessionMonitor(**kw)
+    for ts, ip, size, _in in rows:
+        mon.add_packet(ip, size, ts)
+    last = rows[-1][0]
+    return {p.ip: p for p in mon.evaluate(last)}[rows[-1][1]]
+
+
+def test_shield_settings_clamped():
+    assert an.clamp_shield_pps(None) == 80 and an.clamp_shield_pps(5) == 20
+    assert an.clamp_shield_pps(5000) == 1000 and an.clamp_shield_pps(True) == 80
+    assert an.clamp_shield_seconds("x") == 5.0
+    assert an.clamp_shield_pps(float("nan")) == 80
+
+
+@pytest.mark.parametrize(
+    ("pps", "seconds", "red"),
+    [
+        (79, 30, False),
+        (81, 5.0, True),
+        (81, 4.9, False),
+        (90, 8, True),
+        (90, 4.9, False),
+        (120, 10, True),
+    ],
+)
+def test_shield_absolute_rule_boundaries(pps, seconds, red):
+    p = level_after(burst(PLAYER, pps, seconds))
+    assert (p.level == Level.SUSPECT) is red
+    if red:
+        assert p.reason_key == "reason.rate"
+
+
+def test_shield_rule_configurable():
+    assert level_after(burst(PLAYER, 50, 6), shield_pps=40).level == Level.SUSPECT
+    assert level_after(burst(PLAYER, 90, 6), shield_pps=100).level == Level.NORMAL
+    assert level_after(burst(PLAYER, 90, 3), shield_seconds=2).level == Level.SUSPECT
+
+
+def test_shield_drop_below_resets_period():
+    rows = burst(PLAYER, 90, 3) + burst(PLAYER, 30, 2, start=3.1)[1:]
+    rows += burst(PLAYER, 90, 3, start=5.2)
+    assert level_after(rows).level == Level.NORMAL
+
+
+def test_shield_silence_is_not_sustained():
+    mon = SessionMonitor()
+    for ts, ip, size, _ in burst(PLAYER, 90, 6):
+        mon.add_packet(ip, size, ts)
+    assert mon.sustained(mon.peers[PLAYER], 6.5)
+    assert not mon.sustained(mon.peers[PLAYER], 7.0)
+
+
+@given(st.lists(st.floats(0, 100, allow_nan=False), max_size=400))
+def test_shield_fuzz_bounded(times):
+    mon = SessionMonitor(shield_pps=20)
+    for ts in sorted(times):
+        mon.add_packet(PLAYER, 10, ts)
+    if times:
+        assert len(mon.peers[PLAYER].rate_ts) <= 40
+        mon.evaluate(max(times))
+
+
+def _replay(rows, **kw):
+    return rp.replay(sorted(rows), emit=lambda _l: None, **kw)
+
+
+@pytest.mark.parametrize(
+    ("pps", "seconds", "cut"),
+    [
+        (90, 8, True),
+        (120, 10, True),
+        (79, 20, False),
+        (90, 4.9, False),
+        (81, 5.0, True),
+        (81, 4.9, False),
+    ],
+)
+def test_replay_shield_cut(pps, seconds, cut):
+    res = _replay(burst(PLAYER, pps, seconds), auto_block=True)
+    assert (PLAYER in res.auto_blocked) is cut
+    if cut and seconds >= 8:
+        assert res.dropped_by_ip[PLAYER] > 0
+
+
+def test_replay_shield_respects_auto_block_toggle():
+    res = _replay(burst(PLAYER, 120, 10), auto_block=False)
+    assert res.auto_blocked == [] and res.dropped == 0
+
+
+@pytest.mark.parametrize("pps", [120, 200])
+def test_replay_shield_never_cuts_rockstar_or_friend(pps):
+    rows = burst(ROCKSTAR, pps, 10) + burst("203.0.113.9", pps, 10)
+    res = _replay(rows, auto_block=True, friends={"203.0.113.9": "ami"})
+    assert res.auto_blocked == [] and res.dropped == 0
+
+
+def test_existing_x5_rule_red_actually_cuts():
+    # Normale 20 paquets/s apprise (60 s), puis 120 paquets/s pendant 10 s ;
+    # règle absolue neutralisée : le rouge de la règle x5 doit couper.
+    rows = burst(PLAYER, 20, an.BASELINE_SECONDS + 1)
+    rows += burst(PLAYER, 120, 10, start=an.BASELINE_SECONDS + 1.01)
+    res = _replay(rows, auto_block=True, settings={"shield_pps": 1000})
+    assert PLAYER in res.auto_blocked and res.dropped_by_ip[PLAYER] > 0
+
+
+def test_live_session_red_cuts_in_capture():
+    """Chemin LIVE : évaluation -> bouclier -> liste partagée -> capture jette."""
+    c, clock = ctrl(auto_block=True)
+
+    class Q:
+        def get(self, timeout=0):
+            import queue
+
+            raise queue.Empty
+
+    mon = SessionMonitor()
+    for ts, ip, size, _ in burst(PLAYER, 90, 6, start=999.0 - 6):
+        mon.add_packet(ip, size, ts)
+    s = ls.BackgroundSession(None, Q(), c, mon, ls.PlayerCounter(), None)
+    import time as _t
+
+    orig = _t.time
+    _t.time = lambda: 999.0
+    try:
+        s.evaluate()
+    finally:
+        _t.time = orig
+    assert PLAYER in c.blocked
+    w = W()
+    assert not ls.handle_packet(w, Pkt(PLAYER), dict(c.blocked), {}, 999.0)
+    assert w.sent == []
+
+
+@pytest.mark.skipif(not (QA / "rate.csv").exists(), reason="fichiers QA absents")
+def test_qa_files_replay():
+    for name, cut in (
+        ("rate.csv", {"198.51.100.90"}),
+        ("shield.csv", {"198.51.100.90", "198.51.100.120"}),
+    ):
+        with (QA / name).open(newline="", encoding="utf-8") as f:
+            res = rp.replay(
+                list(rp.read_rows(f)), emit=lambda _l: None, auto_block=True
+            )
+        assert set(res.auto_blocked) == cut

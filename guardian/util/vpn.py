@@ -17,6 +17,13 @@ from functools import lru_cache
 from pathlib import Path
 
 DB_NAME = "vpn_ipv4.bin.gz"
+# R1 : instantané des données embarquées (date de génération + source).
+SNAPSHOT = (
+    "2026-10-27 — https://github.com/sapics/ip-location-db/releases/download/"
+    "latest/origin-asn-ipv4-num.csv (PDDL-1.0)"
+)
+# Lecture bornée : un fichier plus gros est ignoré (aucune IP signalée).
+MAX_DB_BYTES = 1024 * 1024
 
 
 def db_path() -> Path:
@@ -30,7 +37,11 @@ def db_path() -> Path:
 def _load() -> tuple[list[int], list[int]]:
     # Fichier absent ou corrompu : aucune IP signalée, jamais de plantage.
     try:
-        raw = gzip.decompress(db_path().read_bytes())
+        with db_path().open("rb") as f:
+            packed = f.read(MAX_DB_BYTES + 1)
+        if len(packed) > MAX_DB_BYTES:
+            return [], []
+        raw = gzip.decompress(packed)
         starts: list[int] = []
         ends: list[int] = []
         for start, end in struct.iter_unpack(">II", raw):
