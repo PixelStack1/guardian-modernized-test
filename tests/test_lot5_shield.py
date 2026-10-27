@@ -4,7 +4,7 @@ import pytest
 
 from network.anomaly import RATE_CAP, SessionMonitor
 
-IP = "85.214.132.89"
+IP = "198.51.100.89"
 
 
 def cut_after(before: float, after: float, pps: int, shield_pps: int = 80) -> float:

@@ -17,8 +17,8 @@ from util import exehash, health
 from util.driver import CTRL_CLOSE_EVENT, DriverLifecycle
 from util.hotkeys import DEFAULT_HOTKEYS, GlobalHotkeys, hotkey_text
 
-FRIEND = "81.2.69.160"
-OTHER = "91.198.174.22"
+FRIEND = "192.0.2.160"
+OTHER = "203.0.113.22"
 
 
 class Flag:
@@ -115,9 +115,9 @@ def test_emergency_stop_lifts_everything_and_resume_restores_saved():
     c = ctrl(
         bl, bypass_flag=flag, panic_flag=panic, lock_flag=lock, clock=lambda: 100.0
     )
-    c.auto_entries["5.5.5.5"] = 1000.0
-    c.blocked["5.5.5.5"] = 1000.0
-    c.blocked["6.6.6.6"] = ls.PERMANENT
+    c.auto_entries["192.0.2.5"] = 1000.0
+    c.blocked["192.0.2.5"] = 1000.0
+    c.blocked["192.0.2.6"] = ls.PERMANENT
     c.panic = True
     c.session_lock = True
     c.emergency_stop()
@@ -125,13 +125,13 @@ def test_emergency_stop_lifts_everything_and_resume_restores_saved():
     assert not c.blocked and not c.panic and not c.session_lock and not c.auto_block
     assert panic.value == 0 and lock.value == 0
     assert dict(bl) == {OTHER: "y"}  # data.json intact
-    peer = ls.PeerState(ip="7.7.7.7", first_seen=0.0, last_seen=0.0)
+    peer = ls.PeerState(ip="192.0.2.7", first_seen=0.0, last_seen=0.0)
     peer.level = ls.Level.SUSPECT
     c.auto_block = True
     assert not c.auto_block_if_needed(peer)  # aucun nouveau blocage pendant l'urgence
     c.toggle_emergency()
     assert not c.filtering_paused and not flag.value
-    assert c.blocked == {OTHER: ls.PERMANENT, "5.5.5.5": 1000.0}
+    assert c.blocked == {OTHER: ls.PERMANENT, "192.0.2.5": 1000.0}
 
 
 # -- 2) profils ------------------------------------------------------------------
@@ -435,7 +435,7 @@ def test_r1_shield_cuts_300pps_after_emergency_resume(tmp_path):
     toggle_emergency(s)
     toggle_emergency(s)
     assert s.ctrl.auto_block and not s.ctrl.filtering_paused
-    flood = "176.4.29.17"
+    flood = "198.51.100.17"
     feed(s, peers=[(flood, 300, 40)], seconds=8.0)
     assert flood in s.ctrl.blocked
 

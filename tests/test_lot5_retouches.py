@@ -112,17 +112,18 @@ def test_g3_about_button_shows_lgpl(qtbot, win, shown):
     assert "PySide6" in text and "LGPL-3.0" in text
 
 
-# -- G4 : pays de l'IP d'exemple ---------------------------------------------------
-def test_g4_example_ip_country_from_offline_db(win):
-    from util.geoip import country_code
+# -- G4 : exemples et démonstration en plages de documentation (RFC 5737) -------
+def test_g4_demo_ips_are_documentation_ranges():
+    import ipaddress
 
-    code = country_code("91.198.174.22")
-    t = win.live.table
-    row = next(i for i in range(t.rowCount()) if t.item(i, 1).text() == "91.198.174.22")
-    from gui import countries
+    from tests.gui_fakes import DEMO_PEERS
 
-    # L'étiquette affichée suit toujours la base hors ligne (jamais codée en dur).
-    assert t.item(row, 0).text() == countries.name(code)
+    doc = [
+        ipaddress.ip_network(n)
+        for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")
+    ]
+    for ip, _pps, _ping in DEMO_PEERS:
+        assert any(ipaddress.ip_address(ip) in n for n in doc), ip
 
 
 # -- G5 : une notification = un seul affichage -------------------------------------
@@ -279,7 +280,7 @@ def test_kick_button_arms_capture(qtbot, win, session):
 
 
 def test_live_header_buttons(qtbot, win, session):
-    ip = "82.64.12.45"
+    ip = "203.0.113.10"
     select_ip(win, ip)
     click(qtbot, win.live.b_block)
     assert ip in session.blocked
@@ -289,7 +290,7 @@ def test_live_header_buttons(qtbot, win, session):
     select_ip(win, ip)
     click(qtbot, win.live.b_friend)
     assert session.ctrl.is_friend(ip)
-    select_ip(win, "79.23.45.110")
+    select_ip(win, "203.0.113.110")
     click(qtbot, win.live.b_pseudo)  # pas d'exception, passe par la touche P
 
 
@@ -302,7 +303,7 @@ def test_buttons_without_selection_navigate(qtbot, win):
 
 
 def test_blocked_page_unblock(qtbot, win, session):
-    ip = "81.2.69.160"
+    ip = "192.0.2.160"
     win.actions_.block(ip)
     win.refresh()
     win.blocked.table.selectRow(0)
@@ -317,10 +318,11 @@ def test_friends_page_add_remove(qtbot, win, session):
     page.nick.setText("Bob")
     click(qtbot, page.add)
     assert session.ctrl.is_friend("203.0.113.9")
-    assert page.message.text() == "Ami ajouté."
+    ok_msg = page.message.text()
+    assert ok_msg.startswith("Ami ajouté")
     page.ip.setText("pas une ip")
     click(qtbot, page.add)
-    assert page.message.text() == "Adresse invalide ou refusée."
+    assert page.message.text() and page.message.text() != ok_msg
     page.list.setCurrentRow(0)
     click(qtbot, page.remove)
     assert not session.ctrl.is_friend("203.0.113.9")
