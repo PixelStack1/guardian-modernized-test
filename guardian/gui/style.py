@@ -54,6 +54,10 @@ QSlider::groove:horizontal {{ height: 4px; background: #24304a; border-radius: 2
 QSlider::sub-page:horizontal {{ background: {CYAN}; border-radius: 2px; }}
 QSlider::handle:horizontal {{ background: white; width: 14px; margin: -6px 0;
   border-radius: 7px; }}
+QPushButton#chip {{ color: #ffb3bb; background: rgba(255,92,108,0.12);
+  border: 1px solid #6b2a35; border-radius: 6px; padding: 3px 8px; }}
+QPushButton#chipAdd {{ color: {CYAN}; background: rgba(61,214,255,0.10);
+  border: 1px solid #1d4a63; border-radius: 6px; padding: 3px 10px; }}
 #statusOk {{ color: {GREEN}; font-weight: 600; }}
 #statusBad {{ color: {RED}; font-weight: 600; }}
 #footer {{ color: {MUTED}; font-size: 10px; }}

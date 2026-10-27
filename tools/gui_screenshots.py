@@ -27,6 +27,10 @@ def main(out: Path) -> None:
     session = make_session(Path(os.environ["LOCALAPPDATA"]))
     for _ in range(6):
         feed(session, seconds=0.5)
+    for ip, n in (("192.81.241.171", 8), ("192.81.241.110", 3)):
+        for k in range(n):
+            session.monitor.add_packet(ip, 100, session.now - k / n, 6672)
+    session.evaluate()
     win = MainWindow(session, "3.7", ask_text=lambda *_a: "Exemple")
     win.timer.stop()
     win.actions_.block("176.4.29.17", "Exemple")

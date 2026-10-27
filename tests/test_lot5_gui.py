@@ -57,11 +57,11 @@ def select_ip(win, ip):
 
 def test_table_shows_peers_with_country_ping_pps(win, session):
     t = win.live.table
-    assert t.rowCount() == len(session.peers) > 0
+    assert t.rowCount() == len(session.peers) > 0  # aucun serveur R* ici
     ips = {t.item(i, 1).text() for i in range(t.rowCount())}
     assert "82.64.12.45" in ips
     row = next(i for i in range(t.rowCount()) if t.item(i, 1).text() == "82.64.12.45")
-    assert t.item(row, 0).text() == "FR"
+    assert t.item(row, 0).text() == "France"
     assert t.item(row, 2).text().endswith("ms")
     assert float(t.item(row, 3).text()) > 0
     assert "NOUVEAU" in t.item(row, 5).text()
@@ -256,3 +256,52 @@ def test_console_flag_keeps_console_mode():
     )
     src = Path(spec.origin).read_text(encoding="utf-8")
     assert '"--console"' in src and "Menu.main_menu()" in src and "run_gui" in src
+
+
+def test_row_buttons_block_and_unblock(qtbot, win, session, keys):
+    btn = win.live.row_button("91.198.174.22")
+    assert btn is not None and btn.text() == "Bloquer"
+    qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)
+    assert "91.198.174.22" in session.blocked
+    btn = win.live.row_button("91.198.174.22")
+    assert btn.text() == "Débloquer"
+    qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)
+    assert "91.198.174.22" not in session.blocked
+    assert keys == ["b", "d"]
+
+
+def test_flag_and_full_country_name(win):
+    t = win.live.table
+    row = next(i for i in range(t.rowCount()) if t.item(i, 1).text() == "82.64.12.45")
+    assert t.item(row, 0).text() == "France"
+    assert not t.item(row, 0).icon().isNull()
+
+
+def test_rockstar_servers_in_separate_block(win, session):
+    session.monitor.add_packet("192.81.241.171", 100, session.now, 6672)
+    session.evaluate()
+    win.refresh()
+    t = win.live.table
+    assert "192.81.241.171" not in {t.item(i, 1).text() for i in range(t.rowCount())}
+    assert win.live.servers.item(0, 0).text() == "192.81.241.171"
+
+
+def test_country_chips_add_remove(qtbot, win, session):
+    page = win.settings
+    assert "FR" in page.chip_buttons
+    page.country_in.setText("de")
+    qtbot.mouseClick(page.country_add, Qt.MouseButton.LeftButton)
+    assert (
+        "DE" in page.chip_buttons and "DE" in session.config.data["trusted_countries"]
+    )
+    qtbot.mouseClick(page.chip_buttons["DE"], Qt.MouseButton.LeftButton)
+    assert "DE" not in session.config.data["trusted_countries"]
+    assert "DE" not in page.chip_buttons
+    qtbot.mouseClick(page.chip_buttons["FR"], Qt.MouseButton.LeftButton)
+    assert "FR" in page.chip_buttons  # défaut non retirable
+
+
+def test_relay_allowed_is_green(win):
+    win.refresh()
+    assert win.live.relay.pill.text() == "AUTORISÉ"
+    assert win.live.relay.pill.objectName() == "pillOn"

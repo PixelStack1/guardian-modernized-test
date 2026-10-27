@@ -6,8 +6,17 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QPointF, Qt, QTimer
-from PySide6.QtGui import QColor, QKeySequence, QPainter, QPaintEvent, QPen, QShortcut
+from PySide6.QtCore import QPointF, QSize, Qt, QTimer
+from PySide6.QtGui import (
+    QColor,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QPixmap,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -29,14 +38,70 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui import style
+from gui import countries, style
 from gui.core import GuiActions, Settings, Snapshot, take_snapshot
+from network.filters import TRUSTED_DEFAULT
 
 REFRESH_MS = 500
 HISTORY = 120  # 60 s à 500 ms
 
 LEVEL_COLORS = {0: style.GREEN, 1: style.ORANGE, 2: style.RED}
-COLUMNS = ["PAYS", "ADRESSE IP", "PING", "PAQUETS/S", "STATUT", "BADGES", "PSEUDO"]
+COLUMNS = [
+    "PAYS",
+    "ADRESSE IP",
+    "PING",
+    "PAQUETS/S",
+    "STATUT",
+    "BADGES",
+    "PSEUDO",
+    "ACTION",
+]
+ACTION_COL = 7
+_FLAGS: dict[str, QIcon] = {}
+
+
+def flag_icon(code: str) -> QIcon:
+    """Petit drapeau dessiné localement (bandes) ; code en pastille sinon."""
+    icon = _FLAGS.get(code)
+    if icon is not None:
+        return icon
+    pm = QPixmap(20, 14)
+    pm.fill(QColor("#2a3550"))
+    p = QPainter(pm)
+    spec = countries.STRIPES.get(code)
+    if spec is not None:
+        orient, colors = spec
+        n = len(colors)
+        for i, c in enumerate(colors):
+            if orient == "v":
+                x0, x1 = 20 * i // n, 20 * (i + 1) // n
+                p.fillRect(x0, 0, x1 - x0, 14, QColor(c))
+            else:
+                y0, y1 = 14 * i // n, 14 * (i + 1) // n
+                p.fillRect(0, y0, 20, y1 - y0, QColor(c))
+        if code == "CH":
+            p.fillRect(8, 3, 4, 8, QColor("white"))
+            p.fillRect(6, 5, 8, 4, QColor("white"))
+        elif code == "JP":
+            p.setBrush(QColor("#bc002d"))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(6, 3, 8, 8)
+        elif code == "TR":
+            p.setBrush(QColor("white"))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(4, 3, 8, 8)
+            p.setBrush(QColor("#e30a17"))
+            p.drawEllipse(6, 4, 7, 6)
+    else:
+        p.setPen(QColor(style.MUTED))
+        f = p.font()
+        f.setPixelSize(8)
+        p.setFont(f)
+        p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, code[:2] or "?")
+    p.end()
+    icon = QIcon(pm)
+    _FLAGS[code] = icon
+    return icon
 
 
 def card(parent: QWidget | None = None) -> tuple[QFrame, QVBoxLayout]:
@@ -156,6 +221,8 @@ class LivePage(QWidget):
     def __init__(self, win: MainWindow) -> None:
         super().__init__()
         a = win.actions_
+        self.win = win
+        self._buttons: dict[int, tuple[str, bool, QPushButton]] = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
@@ -183,6 +250,7 @@ class LivePage(QWidget):
             "L",
             on_text="BLOQUÉ",
             off_text="AUTORISÉ",
+            off_is_good=True,
         )
         for c in (self.auto, self.total, self.lock, self.rec, self.relay):
             row.addWidget(c)
@@ -234,6 +302,7 @@ class LivePage(QWidget):
             QHeaderView.ResizeMode.Stretch
         )
         self.table.setShowGrid(False)
+        self.table.setIconSize(QSize(20, 14))
         left.addWidget(self.table, 1)
         left.addWidget(
             label(
@@ -243,6 +312,29 @@ class LivePage(QWidget):
                 "cardSub",
             )
         )
+        # Bloc séparé « Serveurs Rockstar » (maquette) : jamais bloqués.
+        srv, sl = card()
+        hl = QHBoxLayout()
+        hl.addWidget(label("SERVEURS ROCKSTAR", "cardSub"))
+        never = QLabel("jamais bloqués")
+        never.setObjectName("pillInfo")
+        hl.addWidget(never)
+        hl.addStretch(1)
+        sl.addLayout(hl)
+        self.servers = QTableWidget(0, 3)
+        self.servers.horizontalHeader().setVisible(False)
+        self.servers.verticalHeader().setVisible(False)
+        self.servers.setShowGrid(False)
+        self.servers.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.servers.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.servers.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.servers.setMaximumHeight(96)
+        sl.addWidget(self.servers)
+        self.no_servers = label("Aucun serveur Rockstar vu pour l'instant.", "cardSub")
+        sl.addWidget(self.no_servers)
+        left.addWidget(srv)
         body.addLayout(left, 3)
         right = QVBoxLayout()
         right.addWidget(label("Alertes", "cardTitle"))
@@ -281,9 +373,10 @@ class LivePage(QWidget):
     def _fill_table(self, snap: Snapshot) -> None:
         t = self.table
         selected = self.selected_ip()
+        players = [r for r in snap.rows if not r.server]
         t.setUpdatesEnabled(False)
-        t.setRowCount(len(snap.rows))
-        for i, r in enumerate(snap.rows):
+        t.setRowCount(len(players))
+        for i, r in enumerate(players):
             tags = list(r.badges)
             if r.new:
                 tags.append("NOUVEAU")
@@ -293,7 +386,7 @@ class LivePage(QWidget):
                 tags.append("RÉCIDIVISTE")
             ping = "—" if r.ping_ms is None else f"{r.ping_ms:.0f} ms"
             cells = [
-                r.country,
+                countries.name(r.country) if r.country != "—" else "Inconnu",
                 r.label,
                 ping,
                 f"{r.pps:.0f}",
@@ -301,13 +394,7 @@ class LivePage(QWidget):
                 " ".join(tags),
                 r.pseudo,
             ]
-            color = (
-                style.CYAN
-                if r.server
-                else style.RED
-                if r.blocked
-                else LEVEL_COLORS.get(r.level, style.TEXT)
-            )
+            color = style.RED if r.blocked else LEVEL_COLORS.get(r.level, style.TEXT)
             for j, text in enumerate(cells):
                 item = t.item(i, j)
                 if item is None:
@@ -316,6 +403,7 @@ class LivePage(QWidget):
                 item.setText(text)
                 if j == 0:
                     item.setData(Qt.ItemDataRole.UserRole, r.ip)
+                    item.setIcon(flag_icon(r.country))
                 if j == 4:
                     item.setForeground(QColor(color))
                 elif j == 5:
@@ -324,9 +412,44 @@ class LivePage(QWidget):
                     )
                 else:
                     item.setForeground(QColor(style.TEXT))
+            self._row_button(i, r.ip, r.blocked)
             if r.ip == selected:
                 t.selectRow(i)
+        for i in [k for k in self._buttons if k >= len(players)]:
+            del self._buttons[i]
         t.setUpdatesEnabled(True)
+        servers = [r for r in snap.rows if r.server]
+        self.servers.setRowCount(len(servers))
+        self.no_servers.setVisible(not servers)
+        for i, r in enumerate(servers):
+            for j, text in enumerate((r.ip, r.status, f"{r.pps:.0f} pkt/s")):
+                item = self.servers.item(i, j)
+                if item is None:
+                    item = QTableWidgetItem()
+                    self.servers.setItem(i, j, item)
+                item.setText(text)
+                item.setForeground(QColor(style.CYAN if j == 0 else style.MUTED))
+
+    def _row_button(self, row: int, ip: str, blocked: bool) -> None:
+        """Bouton Bloquer/Débloquer de la ligne (recréé seulement si la ligne change)."""
+        cur = self._buttons.get(row)
+        if cur is not None and cur[0] == ip and cur[1] == blocked:
+            return
+        b = QPushButton("Débloquer" if blocked else "Bloquer")
+        b.setObjectName("ok" if blocked else "danger")
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        if blocked:
+            b.clicked.connect(lambda _c=False, x=ip: self.win.unblock_ip(x))
+        else:
+            b.clicked.connect(lambda _c=False, x=ip: self.win.block_ip(x))
+        self.table.setCellWidget(row, ACTION_COL, b)
+        self._buttons[row] = (ip, blocked, b)
+
+    def row_button(self, ip: str) -> QPushButton | None:
+        for bip, _b, btn in self._buttons.values():
+            if bip == ip:
+                return btn
+        return None
 
     def selected_ip(self) -> str | None:
         rows = self.table.selectionModel().selectedRows()
@@ -511,21 +634,25 @@ class SettingsPage(QWidget):
         f, lay = card()
         lay.addWidget(label("Filtre pays", "cardTitle"))
         lay.addWidget(label("Pays de confiance : jamais signalés « PAYS ».", "cardSub"))
-        self.countries = QListWidget()
-        self.countries.setFlow(QListWidget.Flow.LeftToRight)
-        self.countries.setWrapping(True)
-        self.countries.setMaximumHeight(70)
-        lay.addWidget(self.countries)
+        self.trusted: list[str] = []
+        self.chips_box = QWidget()
+        self.chips = QGridLayout(self.chips_box)
+        self.chips.setContentsMargins(0, 0, 0, 0)
+        self.chips.setSpacing(6)
+        self.chip_buttons: dict[str, QPushButton] = {}
+        lay.addWidget(self.chips_box)
         r = QHBoxLayout()
         self.country_in = QLineEdit()
         self.country_in.setPlaceholderText("Code pays (ex. DE)")
         self.country_in.setMaxLength(2)
+        self.country_in.setMaximumWidth(150)
+        self.country_in.returnPressed.connect(self._add_country)
         self.country_add = QPushButton("+ Ajouter")
+        self.country_add.setObjectName("chipAdd")
         self.country_add.clicked.connect(lambda _c=False: self._add_country())
-        self.country_del = QPushButton("Retirer")
-        self.country_del.clicked.connect(lambda _c=False: self._del_country())
-        for w in (self.country_in, self.country_add, self.country_del):
-            r.addWidget(w)
+        r.addWidget(self.country_in)
+        r.addWidget(self.country_add)
+        r.addStretch(1)
         lay.addLayout(r)
         grid.addWidget(f, 0, 1)
         # Ping
@@ -632,16 +759,13 @@ class SettingsPage(QWidget):
             self.recording.set(s.recording_seconds)
             self.vpn_flag.setChecked(s.vpn_flag)
             self.vpn_block.setChecked(s.vpn_auto_block)
-            self.countries.clear()
-            self.countries.addItems(s.trusted_countries)
+            self._set_chips(s.trusted_countries)
         finally:
             self._loading = False
 
     def current(self) -> Settings:
         return Settings(
-            trusted_countries=[
-                self.countries.item(i).text() for i in range(self.countries.count())
-            ],
+            trusted_countries=list(self.trusted),
             ping_max_ms=float(self.ping.get()),
             rate_limit_pps=self.rate.get(),
             shield_pps=self.shield_pps.get(),
@@ -657,21 +781,39 @@ class SettingsPage(QWidget):
         self.load(self.win.actions_.apply_settings(self.current()))
         self.win.show_status("Réglages enregistrés", True)
 
+    def _set_chips(self, codes: list[str]) -> None:
+        """Pastilles « drapeau Pays × » (clic = retirer), comme la maquette."""
+        if codes == self.trusted and len(self.chip_buttons) == len(codes):
+            return
+        self.trusted = list(codes)
+        for btn in self.chip_buttons.values():
+            self.chips.removeWidget(btn)
+            btn.deleteLater()
+        self.chip_buttons = {}
+        for i, code in enumerate(self.trusted):
+            fixed = code in TRUSTED_DEFAULT  # toujours de confiance (règle du lot 3)
+            btn = QPushButton(countries.name(code) + ("" if fixed else "  ×"))
+            btn.setObjectName("chip")
+            btn.setIcon(flag_icon(code))
+            if fixed:
+                btn.setToolTip("Pays de confiance par défaut (non retirable)")
+            else:
+                btn.setToolTip(f"Retirer {countries.name(code)}")
+                btn.clicked.connect(lambda _c=False, c=code: self._del_country(c))
+            self.chips.addWidget(btn, i // 3, i % 3)
+            self.chip_buttons[code] = btn
+
     def _add_country(self) -> None:
         code = self.country_in.text().strip().upper()
         if len(code) == 2 and code.isalpha() and code.isascii():
-            existing = [
-                self.countries.item(i).text() for i in range(self.countries.count())
-            ]
-            if code not in existing:
-                self.countries.addItem(code)
+            if code not in self.trusted:
+                self.trusted = [*self.trusted, code]
                 self._changed()
             self.country_in.clear()
 
-    def _del_country(self) -> None:
-        item = self.countries.currentItem()
-        if item is not None:
-            self.countries.takeItem(self.countries.row(item))
+    def _del_country(self, code: str) -> None:
+        if code in self.trusted:
+            self.trusted = [c for c in self.trusted if c != code]
             self._changed()
 
     def _relay(self, block: bool) -> None:
@@ -848,6 +990,16 @@ class MainWindow(QMainWindow):
         self.pilot.setObjectName("footerOk" if snap.alive else "statusBad")
 
     # Actions sur la ligne sélectionnée.
+    def block_ip(self, ip: str) -> None:
+        pseudo = self.ask_text(self, "Bloquer", f"Pseudo pour {ip} (facultatif) :")
+        if pseudo is not None:
+            self.actions_.block(ip, pseudo)
+        self.refresh()
+
+    def unblock_ip(self, ip: str) -> None:
+        self.actions_.unblock(ip)
+        self.refresh()
+
     def block_selected(self) -> None:
         ip = self.live.selected_ip()
         if ip is None:
