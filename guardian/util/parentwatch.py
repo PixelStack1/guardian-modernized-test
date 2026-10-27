@@ -358,16 +358,52 @@ def armed_target(
     gui_pid: int, purpose: str, target: Callable[..., object], *args: object
 ) -> None:
     """Cible de Process : arme le chien de garde GUI dans le point d'entrée réel
-    de l'enfant, puis exécute ``target``. Nettoyage driver borné à la sortie."""
+    de l'enfant, puis exécute ``target``. Nettoyage driver borné à la sortie.
+
+    Aucune exception ne sort d'ici : en exe fenêtré, ``sys.stderr`` vaut None et
+    multiprocessing lèverait AttributeError en l'imprimant ; le chargeur afficherait
+    alors une boîte modale « Unhandled exception in script » qui fige le processus
+    (handle WinDivert/SCM et dossier _MEI retenus). L'erreur est journalisée, puis
+    sortie avec un code entier (fail-open : handle fermé, trafic non détourné)."""
     with contextlib.suppress(Exception):
         from util.driver import orphan_cleanup
 
         arm_with_pid(gui_pid, purpose, on_exit=orphan_cleanup)
     try:
         target(*args)
-    except BaseException:
+    except BaseException as exc:
+        if isinstance(exc, SystemExit) and isinstance(exc.code, int | None):
+            raise
         ci_traceback(f"target {purpose}")  # diagnostic CI seulement
-        raise
+        if _orphan_requested():
+            # GUI disparue : WinDivertShutdown a interrompu la lecture, attendu.
+            logging.getLogger("debugger").info(
+                "%s: capture stopped after GUI exit (%s)", purpose, type(exc).__name__
+            )
+            return
+        logging.getLogger("debugger").exception(
+            "%s: unhandled exception, worker exits (fail-open)", purpose
+        )
+        raise SystemExit(1) from None
+    finally:
+        if _orphan_requested():
+            _wait_orphan(WORKER_CLEANUP_S)  # fermeture de NOTRE handle terminée
+
+
+def _orphan_requested() -> bool:
+    try:
+        from util.driver import orphan_shutdown_requested
+
+        return orphan_shutdown_requested()
+    except Exception:
+        return False
+
+
+def _wait_orphan(timeout: float) -> None:
+    with contextlib.suppress(Exception):
+        from util.driver import wait_orphan_cleanup
+
+        wait_orphan_cleanup(timeout)
 
 
 def _sentinel_cleanup(owned: Any) -> Callable[[], object]:

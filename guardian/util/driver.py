@@ -154,9 +154,38 @@ def track_handle(handle: Any) -> None:
         _open_handles[id(handle)] = handle
 
 
-def untrack_handle(handle: Any) -> None:
+def untrack_handle(handle: Any) -> bool:
+    """True si le handle était encore suivi : l'appelant en possède alors la
+    fermeture. False : le nettoyage orphelin l'a déjà pris (et le ferme)."""
     with _handles_lock:
-        _open_handles.pop(id(handle), None)
+        return _open_handles.pop(id(handle), None) is not None
+
+
+# Nettoyage orphelin (GUI disparue) : demandé / terminé. Une erreur de lecture du
+# fil de capture après WinDivertShutdown est alors attendue (pas un plantage).
+_orphan_requested = threading.Event()
+_orphan_done = threading.Event()
+
+
+def orphan_shutdown_requested() -> bool:
+    return _orphan_requested.is_set()
+
+
+def wait_orphan_cleanup(timeout: float) -> bool:
+    """Attente bornée de la fin du nettoyage orphelin (fermeture de NOS handles)."""
+    return _orphan_done.wait(timeout)
+
+
+def close_handle(handle: Any) -> str:
+    """Fermeture unique et journalisée d'un handle WinDivert ; jamais d'exception
+    (appelée dans un ``finally`` : ne masque pas l'erreur d'origine)."""
+    try:
+        if getattr(handle, "is_open", True):
+            handle.close()
+        return "close"
+    except Exception as e:
+        logger.warning("WinDivert handle close failed: %s", e)
+        return "close:failed"
 
 
 def mark_owned(loaded_by_guardian: bool) -> None:
@@ -213,19 +242,22 @@ def orphan_cleanup(windivert: Any = None) -> list[str]:
     import os
 
     steps: list[str] = []
-    with _handles_lock:  # idempotent : un seul appel concurrent ferme chaque handle
-        handles = list(_open_handles.values())
-        _open_handles.clear()
-    for h in handles:
-        r = cancel_pending_io(h)
-        if r != "cancel:none":
-            steps.append(r)
-    for h in handles:
-        try:
-            h.close()
-            steps.append("close")
-        except Exception as e:
-            logger.warning("orphan cleanup: close failed: %s", e)
+    _orphan_requested.set()
+    try:
+        with _handles_lock:  # idempotent : un seul appel concurrent ferme chaque handle
+            handles = list(_open_handles.values())
+            _open_handles.clear()
+        for h in handles:
+            r = cancel_pending_io(h)
+            if r != "cancel:none":
+                steps.append(r)
+        for h in handles:
+            # Seul propriétaire de ces handles (retirés sous verrou) : une fermeture.
+            r = close_handle(h)
+            if r == "close":
+                steps.append(r)
+    finally:
+        _orphan_done.set()
     if os.environ.get(OWNED_ENV) != "1":
         return steps
     try:

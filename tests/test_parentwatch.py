@@ -169,13 +169,54 @@ def test_ci_traceback_writes_full_traceback_in_ci_probe(monkeypatch, tmp_path):
     assert "where=test" in text and "Traceback" in text and "ValueError: boom" in text
 
 
-def test_armed_target_logs_and_reraises(monkeypatch, tmp_path):
+def _fresh_orphan_state(monkeypatch, requested: bool = False):
+    import threading as th
+
+    from util import driver
+
+    req, done = th.Event(), th.Event()
+    if requested:
+        req.set()
+        done.set()
+    monkeypatch.setattr(driver, "_orphan_requested", req)
+    monkeypatch.setattr(driver, "_orphan_done", done)
+
+
+def test_armed_target_unexpected_error_logs_and_exits_1(monkeypatch, tmp_path):
+    """Jamais d'exception hors de la cible : multiprocessing écrirait sur
+    sys.stderr (None en exe fenêtré) -> boîte modale du chargeur."""
     _ci_env(monkeypatch, tmp_path, dry=True)
+    _fresh_orphan_state(monkeypatch)
+    monkeypatch.setattr(parentwatch, "arm_with_pid", lambda *a, **k: None)
 
     def target() -> None:
         raise OSError("recv failed")
 
-    with pytest.raises(OSError):
+    with pytest.raises(SystemExit) as exc:
         parentwatch.armed_target(0, "live capture", target)
+    assert exc.value.code == 1
     text = (tmp_path / "Guardian" / parentwatch.CRASH_LOG).read_text("utf-8")
     assert "target live capture" in text and "OSError: recv failed" in text
+
+
+def test_armed_target_read_error_after_orphan_shutdown_is_clean(monkeypatch, tmp_path):
+    _ci_env(monkeypatch, tmp_path, dry=False)
+    _fresh_orphan_state(monkeypatch, requested=True)
+    monkeypatch.setattr(parentwatch, "arm_with_pid", lambda *a, **k: None)
+
+    def target() -> None:
+        raise BrokenPipeError(232, "The pipe is being closed")
+
+    assert parentwatch.armed_target(0, "live capture", target) is None
+
+
+def test_armed_target_keeps_integer_system_exit(monkeypatch):
+    _fresh_orphan_state(monkeypatch)
+    monkeypatch.setattr(parentwatch, "arm_with_pid", lambda *a, **k: None)
+
+    def target() -> None:
+        raise SystemExit(3)
+
+    with pytest.raises(SystemExit) as exc:
+        parentwatch.armed_target(0, "x", target)
+    assert exc.value.code == 3

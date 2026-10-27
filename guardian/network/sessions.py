@@ -15,7 +15,7 @@ import pydivert
 from network.sessioninfo import SessionInfo
 from util import parentwatch
 from util.console import get_original_console_title, set_console_title
-from util.driver import orphan_cleanup, track_handle, untrack_handle
+from util.driver import close_handle, orphan_cleanup, track_handle, untrack_handle
 from util.dynamicblacklist import T2_EU_FALLBACK, T2_US_FALLBACK
 from util.network import construct_cidr_block_set, ip_in_cidr_block_set
 from util.types import CIDR_BLOCK
@@ -144,9 +144,11 @@ def open_windivert(
     try:
         yield handle
     finally:
-        untrack_handle(handle)
-        if handle.is_open:
-            handle.close()
+        # Toujours fermé, même sur exception, et UNE seule fois : si le nettoyage
+        # orphelin (autre fil) a déjà pris le handle, c'est lui qui le ferme ; un
+        # second CloseHandle levait WinError 6 et masquait l'erreur d'origine.
+        if untrack_handle(handle):
+            close_handle(handle)
 
 
 def probe_filter(extra_ports: bool = True) -> None:

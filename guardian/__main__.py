@@ -77,7 +77,22 @@ def notify(text: str, console: bool | None = None) -> None:
         print_white(text)
 
 
+def ensure_child_streams(argv: list[str]) -> None:
+    """Enfant multiprocessing d'un exe fenêtré : sys.stdout/stderr valent None ;
+    multiprocessing y écrit les erreurs (AttributeError -> boîte modale du chargeur
+    qui fige le processus). Flux nuls à la place. Sans effet ailleurs."""
+    if "--multiprocessing-fork" not in argv:
+        return
+    import os
+
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name, None) is None:
+            with contextlib.suppress(Exception):
+                setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))  # noqa: SIM115
+
+
 if __name__ == "__main__":
+    ensure_child_streams(sys.argv)
     # Lot 8 : un enfant multiprocessing quitte si la GUI qui l'a lancé est tuée.
     with contextlib.suppress(Exception):
         from util import parentwatch as _pw
