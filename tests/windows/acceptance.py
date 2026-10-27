@@ -42,6 +42,11 @@ WM_CLOSE = 0x0010
 WM_QUERYENDSESSION = 0x0011
 WM_ENDSESSION = 0x0016
 WM_HOTKEY = 0x0312
+WM_GETTEXT = 0x000D
+WM_GETTEXTLENGTH = 0x000E
+SMTO_ABORTIFHUNG = 0x0002
+# Boîtes du chargeur PyInstaller : exception non gérée (enfant) / avertissement.
+ERROR_DIALOG_TITLES = ("Unhandled exception in script", "Warning")
 ENDSESSION_LOGOFF = 0x80000000
 MOD_ALT, MOD_CONTROL, MOD_SHIFT = 0x0001, 0x0002, 0x0004
 VK_F12, VK_LCONTROL, VK_RMENU, VK_MENU, VK_CONTROL = 0x7B, 0xA2, 0xA5, 0x12, 0x11
@@ -232,6 +237,40 @@ class Win:  # pragma: no cover - Windows
         buf = self.ct.create_unicode_buffer(256)
         self.u32.GetWindowTextW(hwnd, buf, 256)
         return str(buf.value)
+
+    def child_texts(self, hwnd: int) -> list[str]:
+        """Textes des contrôles d'une fenêtre (WM_GETTEXT inter-processus, lecture
+        seule) : libellé et zone de traceback d'une boîte d'erreur du chargeur."""
+        ct, wt, kids = self.ct, self.wt, []
+        proto = ct.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+        def cb(child: Any, _l: Any) -> bool:
+            kids.append(int(child))
+            return True
+
+        self.u32.EnumChildWindows(hwnd, proto(cb), 0)
+        texts = []
+        for child in kids:
+            n = ct.c_size_t(0)
+            self.u32.SendMessageTimeoutW(
+                child, WM_GETTEXTLENGTH, 0, 0, SMTO_ABORTIFHUNG, 2000, ct.byref(n)
+            )
+            if not n.value:
+                continue
+            buf = ct.create_unicode_buffer(int(n.value) + 1)
+            got = ct.c_size_t(0)
+            self.u32.SendMessageTimeoutW(
+                child,
+                WM_GETTEXT,
+                int(n.value) + 1,
+                ct.addressof(buf),
+                SMTO_ABORTIFHUNG,
+                2000,
+                ct.byref(got),
+            )
+            if buf.value:
+                texts.append(str(buf.value))
+        return texts
 
     def owner_pid(self, hwnd: int) -> int:
         owner = self.wt.DWORD()
@@ -816,6 +855,48 @@ def spawn_log() -> list[str]:
         return []
 
 
+def crash_log_path() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+    return Path(base) / "Guardian" / "ci-crash.log"
+
+
+def error_dialogs(
+    titles_by_pid: Mapping[int, list[tuple[int, str]]],
+) -> list[tuple[int, int, str]]:
+    """(pid, hwnd, titre) des boîtes d'erreur du chargeur parmi les fenêtres vues."""
+    return [
+        (pid, hwnd, title)
+        for pid, wins in titles_by_pid.items()
+        for hwnd, title in wins
+        if any(title.startswith(t) for t in ERROR_DIALOG_TITLES)
+    ]
+
+
+def dump_dialogs(
+    exe: Path, out: Path, win: Win, tag: str
+) -> list[tuple[int, int, str]]:  # pragma: no cover - Windows
+    """Lecture seule : boîtes « Unhandled exception » / « Warning » des processus de
+    notre exe, texte complet (traceback) journalisé et écrit sous ``out``."""
+    pids = [int(x.split("<-")[0]) for x in same_exe_processes(exe).split() if "<-" in x]
+    seen = {p: [(h, win.title(h)) for h in win.windows_of(p)] for p in pids}
+    found = error_dialogs(seen)
+    lines = [f"[{tag}] windows: {seen}"]
+    for pid, hwnd, title in found:
+        lines.append(f"--- pid={pid} hwnd={hwnd} title={title!r}")
+        lines.extend(win.child_texts(hwnd))
+    crash = ""
+    with contextlib.suppress(OSError):
+        crash = crash_log_path().read_text("utf-8")
+    lines.append(f"--- ci-crash.log ({len(crash)} chars)")
+    lines.append(crash)
+    text = "\n".join(lines)
+    with contextlib.suppress(OSError):
+        (out / f"dialogs_{tag}.txt").write_text(text, "utf-8")
+    for line in text.splitlines():
+        print(f"[DIALOG] {line}", flush=True)
+    return found
+
+
 def same_exe_processes(
     exe: Path, cmdline: bool = False
 ) -> str:  # pragma: no cover - Windows
@@ -846,6 +927,8 @@ def scenario_kill(
         if not ok:  # diagnostic en lecture seule : instances restantes de l'exe
             detail += "; left: " + same_exe_processes(exe, cmdline=True)
             detail += "; ci-spawn.log: " + " | ".join(spawn_log()[-30:])
+        if target == "child":
+            dump_dialogs(exe, out, win, "kill_child")
         name = f"taskkill /F {target} PID: process tree exited"
         if target == "child":  # docs/ci-acceptance.md, « Réserve connue »
             rep.reserve(name, ok, detail, "capture helper lingers, no driver access")
@@ -881,6 +964,7 @@ def relaunch_after_kill(
                 f"ci-spawn.log: {' | '.join(spawn_log()[-12:])}",
                 flush=True,
             )
+            dump_dialogs(exe, out, win, "relaunch")
             return
         sc = sc_query()
         rep.check(
@@ -955,6 +1039,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - Windows
     rep, win = Report(), Win()
     with contextlib.suppress(OSError):
         spawn_log_path().unlink()
+    with contextlib.suppress(OSError):
+        crash_log_path().unlink()
     rep.metrics["thresholds"] = {k: threshold(k) for k in THRESHOLDS}
     if os.environ.get("GUARDIAN_CI_PROBE") != "1":
         # Sans cette variable (et CI=true), l'exe ignore --ci-probe : protection réelle.
@@ -982,6 +1068,9 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - Windows
             if driver_active(sc_query()):  # isoler les scénarios
                 subprocess.run(["sc.exe", "stop", "WinDivert"], capture_output=True)
                 time.sleep(3)
+    for src in (spawn_log_path(), crash_log_path()):
+        with contextlib.suppress(OSError):
+            (out / src.name).write_text(src.read_text("utf-8"), "utf-8")
     (out / "acceptance.json").write_text(
         json.dumps(
             {"checks": rep.checks, "metrics": rep.metrics, "failed": rep.failed},

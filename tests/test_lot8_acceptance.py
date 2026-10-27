@@ -679,3 +679,17 @@ def test_child_argv_keeps_ci_and_owned_env_parent_drops_inherited(tmp_path):
         "child", {"GUARDIAN_DRIVER_OWNED": parent["owned"]}, tmp_path
     )
     assert child["owned"] == "1"
+
+
+def test_error_dialogs_detects_loader_boxes_only():
+    bench = load_bench()
+    seen = {
+        1: [(10, "Warning")],
+        2: [(20, "Unhandled exception in script")],
+        3: [(30, "Guardian"), (31, "tk")],
+    }
+    assert bench.error_dialogs(seen) == [
+        (1, 10, "Warning"),
+        (2, 20, "Unhandled exception in script"),
+    ]
+    assert bench.error_dialogs({3: [(30, "Guardian")]}) == []
