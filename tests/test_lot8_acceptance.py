@@ -343,3 +343,16 @@ def test_managers_are_watched_and_die_with_gui(monkeypatch):
         assert "Manager()" not in src.replace("watched_manager()", "")
     src = (ROOT / "guardian" / "util" / "parentwatch.py").read_text("utf-8")
     assert "manager.start(initializer=arm_in_child)" in src
+
+
+def test_auto_arm_at_import_uses_argv_only_in_children(monkeypatch):
+    from util import parentwatch
+
+    got = []
+    monkeypatch.setattr(
+        parentwatch, "watch_spawn_parent", lambda a, **k: got.append(a) or True
+    )
+    assert parentwatch.auto_arm(["g.exe", "--multiprocessing-fork", "parent_pid=7"])
+    src = (ROOT / "guardian" / "util" / "parentwatch.py").read_text("utf-8")
+    assert src.rstrip().endswith("auto_arm()")
+    assert parentwatch.spawn_parent_pid(["pytest"]) is None  # inerte ici

@@ -187,3 +187,24 @@ def watched_manager() -> Any:
     manager = SyncManager()
     manager.start(initializer=arm_in_child)
     return manager
+
+
+def _orphan_cleanup_lazy() -> None:
+    from util.driver import orphan_cleanup
+
+    orphan_cleanup()
+
+
+def auto_arm(argv: list[str] | None = None) -> bool:
+    """Armement à l'import dans tout enfant multiprocessing qui charge nos modules
+    (cible ou initialiseur dépicklé). ``parent_process()`` n'y est pas encore
+    défini (spawn le pose après le dépicklage), d'où l'argv ``parent_pid=N``."""
+    try:
+        return watch_spawn_parent(
+            sys.argv if argv is None else argv, on_parent_exit=_orphan_cleanup_lazy
+        )
+    except Exception:
+        return False
+
+
+auto_arm()
