@@ -21,6 +21,7 @@ from tests.gui_fakes import feed, make_session  # noqa: E402
 def main(out: Path) -> None:
     from gui.window import MainWindow
     from menu import livesession as ls
+    from util.geoip import country_label
 
     out.mkdir(parents=True, exist_ok=True)
     app = QApplication.instance() or QApplication(sys.argv)
@@ -40,7 +41,7 @@ def main(out: Path) -> None:
 
     rep = reports_dir()
     rep.mkdir(parents=True, exist_ok=True)
-    for name in ("20261027-142201_176.4.29.17", "20261027-150512_177.54.148.23"):
+    for name in ("20261027-142201_198.51.100.17", "20261027-150512_198.51.100.23"):
         (rep / f"{name}.txt").write_text("Rapport d'incident (exemple)\n" * 40)
         (rep / f"{name}.json").write_text("{}")
     rec = Path(os.environ["LOCALAPPDATA"])
@@ -48,11 +49,15 @@ def main(out: Path) -> None:
         (rec / f"{name}.csv").write_text("ts,ip,size\n" + "0,0.0.0.0,0\n" * 300)
     win = MainWindow(session, "3.7", ask_text=lambda *_a: "Exemple")
     win.timer.stop()
-    win.actions_.block("176.4.29.17", "Exemple")
-    win.actions_.toggle_friend("85.214.132.89", "Ami")
-    session.ctrl.offender_ips["177.54.148.23"] = 1.0
+    win.actions_.block("198.51.100.17", "Exemple")
+    win.actions_.toggle_friend("198.51.100.89", "Ami")
+    session.ctrl.offender_ips["198.51.100.23"] = 1.0
     session.ctrl.events.append(
-        ls.t("live.ev.new_player", ip="85.214.132.89", country="DE")
+        ls.t(
+            "live.ev.new_player",
+            ip="198.51.100.89",
+            country=country_label("198.51.100.89"),  # RFC 5737 : pays inconnu
+        )
     )
     win.actions_.toggle_lock()
     win.actions_.toggle_lock()

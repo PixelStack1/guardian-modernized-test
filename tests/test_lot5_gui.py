@@ -55,13 +55,26 @@ def select_ip(win, ip):
     raise AssertionError(ip)
 
 
+# Vraie IP publique, uniquement pour vérifier la géolocalisation hors ligne
+# (les données de démonstration utilisent les plages RFC 5737).
+GEO_IP = "82.64.12.45"
+
+
+def add_geo_peer(win, session):
+    feed(session, [(GEO_IP, 18, 28)])
+    win.refresh()
+
+
 def test_table_shows_peers_with_country_ping_pps(win, session):
     t = win.live.table
     assert t.rowCount() == len(session.peers) > 0  # aucun serveur R* ici
     ips = {t.item(i, 1).text() for i in range(t.rowCount())}
-    assert "82.64.12.45" in ips
-    row = next(i for i in range(t.rowCount()) if t.item(i, 1).text() == "82.64.12.45")
-    assert t.item(row, 0).text() == "France"
+    assert "203.0.113.10" in ips
+    row = next(i for i in range(t.rowCount()) if t.item(i, 1).text() == "203.0.113.10")
+    assert t.item(row, 0).text() == "Inconnu"  # plage de documentation
+    add_geo_peer(win, session)
+    geo = next(i for i in range(t.rowCount()) if t.item(i, 1).text() == GEO_IP)
+    assert t.item(geo, 0).text() == "France"
     assert t.item(row, 2).text().endswith("ms")
     assert float(t.item(row, 3).text()) > 0
     from gui.window import BADGES_ROLE
@@ -122,44 +135,44 @@ def test_recording_and_kick_buttons(qtbot, win, session, keys):
 
 
 def test_block_unblock_selected_row(qtbot, win, session, keys):
-    select_ip(win, "91.198.174.22")
+    select_ip(win, "203.0.113.22")
     qtbot.mouseClick(win.live.b_block, Qt.MouseButton.LeftButton)
-    assert "91.198.174.22" in session.blocked
-    assert session.ctrl.blacklist.get("91.198.174.22") is not None
-    select_ip(win, "91.198.174.22")
+    assert "203.0.113.22" in session.blocked
+    assert session.ctrl.blacklist.get("203.0.113.22") is not None
+    select_ip(win, "203.0.113.22")
     qtbot.mouseClick(win.live.b_unblock, Qt.MouseButton.LeftButton)
-    assert "91.198.174.22" not in session.blocked
+    assert "203.0.113.22" not in session.blocked
     assert keys == ["b", "d"]
 
 
 def test_blocked_page_unblock(qtbot, win, session, keys):
-    win.actions_.block("85.214.132.89", "x")
+    win.actions_.block("198.51.100.89", "x")
     win.refresh()
     page = win.blocked
     assert page.table.rowCount() == 1
     page.table.selectRow(0)
     qtbot.mouseClick(page.unblock, Qt.MouseButton.LeftButton)
-    assert "85.214.132.89" not in session.blocked
+    assert "198.51.100.89" not in session.blocked
     assert keys == ["b", "d"]
 
 
 def test_friend_toggle_and_friends_page(qtbot, win, session, keys):
-    select_ip(win, "79.23.45.110")
+    select_ip(win, "203.0.113.110")
     qtbot.mouseClick(win.live.b_friend, Qt.MouseButton.LeftButton)
-    assert session.ctrl.friends.get("79.23.45.110") == "Toto"
-    assert session.config.data[ls.FRIENDS_KEY] == {"79.23.45.110": "Toto"}
+    assert session.ctrl.friends.get("203.0.113.110") == "Toto"
+    assert session.config.data[ls.FRIENDS_KEY] == {"203.0.113.110": "Toto"}
     win.refresh()
     assert win.friends.list.count() == 1
     win.friends.list.setCurrentRow(0)
     qtbot.mouseClick(win.friends.remove, Qt.MouseButton.LeftButton)
-    assert "79.23.45.110" not in session.ctrl.friends
+    assert "203.0.113.110" not in session.ctrl.friends
     win.friends.ip.setText("pas-une-ip")
     qtbot.mouseClick(win.friends.add, Qt.MouseButton.LeftButton)
     assert not session.ctrl.friends
-    win.friends.ip.setText("81.2.69.160")
+    win.friends.ip.setText("192.0.2.160")
     win.friends.nick.setText("Ami")
     qtbot.mouseClick(win.friends.add, Qt.MouseButton.LeftButton)
-    assert session.ctrl.friends == {"81.2.69.160": "Ami"}
+    assert session.ctrl.friends == {"192.0.2.160": "Ami"}
     assert keys == ["f"]
 
 
@@ -264,20 +277,21 @@ def test_console_flag_keeps_console_mode():
 
 
 def test_row_buttons_block_and_unblock(qtbot, win, session, keys):
-    btn = win.live.row_button("91.198.174.22")
+    btn = win.live.row_button("203.0.113.22")
     assert btn is not None and btn.text() == "Bloquer"
     qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)
-    assert "91.198.174.22" in session.blocked
-    btn = win.live.row_button("91.198.174.22")
+    assert "203.0.113.22" in session.blocked
+    btn = win.live.row_button("203.0.113.22")
     assert btn.text() == "Débloquer"
     qtbot.mouseClick(btn, Qt.MouseButton.LeftButton)
-    assert "91.198.174.22" not in session.blocked
+    assert "203.0.113.22" not in session.blocked
     assert keys == ["b", "d"]
 
 
-def test_flag_and_full_country_name(win):
+def test_flag_and_full_country_name(win, session):
+    add_geo_peer(win, session)
     t = win.live.table
-    row = next(i for i in range(t.rowCount()) if t.item(i, 1).text() == "82.64.12.45")
+    row = next(i for i in range(t.rowCount()) if t.item(i, 1).text() == GEO_IP)
     assert t.item(row, 0).text() == "France"
     assert not t.item(row, 0).icon().isNull()
 
@@ -319,11 +333,15 @@ def test_settings_shield_help_text_fr_en(qtbot, win):
     try:
         win.settings.lang_fr.click()
         fr = win.settings.shield_help.text()
-        assert fr.startswith("Une rafale partant d'un débit bas")
+        assert fr.startswith(
+            "Coupure si la moyenne dépasse le seuil sur le délai choisi ; inondations > 3× coupées plus vite."
+        )
+        assert "Une rafale partant d'un débit bas" in fr
         assert "Rockstar/Take-Two ou Azure" in fr and "~600 paquets/s" in fr
         win.settings.lang_en.click()
         en = win.settings.shield_help.text()
-        assert en.startswith("A burst starting from a low rate")
+        assert en.startswith("Cut off when the average exceeds the threshold")
+        assert "A burst starting from a low rate" in en
         assert "Rockstar/Take-Two or Azure" in en and "~600 packets/s" in en
     finally:
         set_language(before, persist=False)
@@ -347,15 +365,15 @@ def test_reports_page_lists_existing_reports_read_only(win):
 
     d = reports_dir()
     d.mkdir(parents=True, exist_ok=True)
-    (d / "20261027-142201_176.4.29.17.txt").write_text("rapport")
-    (d / "20261027-142201_176.4.29.17.json").write_text("{}")
+    (d / "20261027-142201_198.51.100.17.txt").write_text("rapport")
+    (d / "20261027-142201_198.51.100.17.json").write_text("{}")
     before = sorted(p.name for p in d.iterdir())
     win.nav[win.REPORTS].click()
     win.reports.rescan()
     names = [
         win.reports.table.item(i, 0).text() for i in range(win.reports.table.rowCount())
     ]
-    assert "20261027-142201_176.4.29.17.txt" in names
+    assert "20261027-142201_198.51.100.17.txt" in names
     assert all(n.endswith(".txt") for n in names)
     assert sorted(p.name for p in d.iterdir()) == before  # rien écrit ni supprimé
 

@@ -54,6 +54,7 @@ class DriverLifecycle:
         self.loaded_by_guardian = False
         self._cleaned = False
         self._lock = threading.Lock()
+        self._done = threading.Event()
         self._pre: list[Callable[[], Any]] = []
         self._handler: Any = None
         self.steps: list[str] = []  # journal de l'arrêt (tests, history.log)
@@ -76,9 +77,19 @@ class DriverLifecycle:
 
     def cleanup(self) -> None:
         with self._lock:
-            if self._cleaned:
-                return
+            already = self._cleaned
             self._cleaned = True
+        if already:
+            # Un autre appelant nettoie déjà : attendre qu'il ait fini (unregister compris)
+            # avant de rendre la main (ex. watchdog suivi de os._exit).
+            self._done.wait(10)
+            return
+        try:
+            self._cleanup_steps()
+        finally:
+            self._done.set()
+
+    def _cleanup_steps(self) -> None:
         for fn in reversed(self._pre):
             try:
                 fn()

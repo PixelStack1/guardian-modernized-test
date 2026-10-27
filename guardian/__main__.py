@@ -6,7 +6,6 @@ from multiprocessing import freeze_support
 
 import pydivert
 
-from menu.menu import Menu
 from network.sessions import FilterOpenError, extra_ports_enabled, probe_filter
 from util.console import attach_console
 from util.crash import crash_report
@@ -40,7 +39,7 @@ if not debug_logger.handlers:
             datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
-debug_logger.addHandler(fh)
+    debug_logger.addHandler(fh)
 
 
 CONSOLE_MODE = "--console" in sys.argv
@@ -51,13 +50,27 @@ def gui_mode(argv: list[str]) -> bool:
     return "--console" not in argv and "--self-test-exit" not in argv
 
 
-def notify(text: str) -> None:
-    """Message utilisateur : console, ou boîte de dialogue Windows en mode fenêtré."""
-    if CONSOLE_MODE or sys.stdout is not None:
-        print_white(text)
-    if not CONSOLE_MODE:
-        with contextlib.suppress(Exception):
+def close_splash() -> None:
+    """Ferme l'écran de démarrage PyInstaller (exe gelé uniquement)."""
+    with contextlib.suppress(Exception):
+        import importlib
+
+        importlib.import_module("pyi_splash").close()
+
+
+def notify(text: str, console: bool | None = None) -> None:
+    """Message utilisateur affiché UNE seule fois : console en mode ``--console``,
+    sinon boîte de dialogue Windows (repli console si elle échoue)."""
+    console = CONSOLE_MODE if console is None else console
+    if not console:
+        close_splash()
+        try:
             ctypes.windll.user32.MessageBoxW(0, text, "Guardian", 0x10)
+            return
+        except Exception as e:
+            debug_logger.debug("MessageBoxW failed, console fallback: %s", e)
+    if sys.stdout is not None:
+        print_white(text)
 
 
 if __name__ == "__main__":
@@ -90,6 +103,13 @@ if __name__ == "__main__":
 
         driver.add_pre_cleanup(stop_background)
         driver.install_console_handler()
+        # Onefile: si le bootloader parent est tué seul, l'enfant libère le pilote et sort.
+        from util import parentwatch
+
+        if parentwatch.is_onefile_child():
+            probe = parentwatch.windows_parent_probe()
+            if probe is not None:
+                parentwatch.start_parent_watchdog(probe, driver.cleanup)
         try:
             probe_filter(extra_ports_enabled())
         except FilterOpenError as e:
@@ -105,12 +125,18 @@ if __name__ == "__main__":
     try:
         if "--self-test-exit" in sys.argv:
             # Non-interactive quit path used by CI: initialise (driver loaded), then exit normally.
+            close_splash()
             print_white(t("main.self_test"))
         elif gui_mode(sys.argv):
             from gui.app import run_gui
 
             run_gui(version=__version__, on_shutdown=driver.cleanup)
         else:
+            close_splash()
+            # Import tardif : menu.menu télécharge les plages Azure à l'import ;
+            # en mode GUI, cela se fait derrière la fenêtre de démarrage.
+            from menu.menu import Menu
+
             Menu.main_menu()
     except KeyboardInterrupt:
         pass

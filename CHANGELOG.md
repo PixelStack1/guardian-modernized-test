@@ -9,6 +9,15 @@
 - Arrêt propre du pilote : session en fond fermée avant le service WinDivert, aussi sur fermeture de console / déconnexion / arrêt (SetConsoleCtrlHandler) et aboutToQuit.
 - Diagnostic au démarrage (admin, WinDivert intègre, data.json lisible) et SHA256 de l'exécutable dans les Réglages.
 
+## Non publié — Lot 5, retouches d'audit
+
+- G2 : aide du bouclier — phrase d'ouverture rétablie (moyenne > seuil sur le délai ; inondations > 3× coupées plus vite).
+- G3 : avis LGPL de PySide6 (`THIRD_PARTY_NOTICES.txt`, inclus dans l'exe) et bouton « À propos · licences ».
+- G5 : `notify()` n'affiche plus deux fois le même message ; le journal de débogage n'hérite plus du gestionnaire de `history.log`.
+- `recordings_directory()` ne crée plus le dossier (conforme à sa docstring).
+- Démarrage : écran PyInstaller pendant la décompression, puis fenêtre « Démarrage… » ; `menu.menu` (téléchargements) importé seulement après ; dépendance réduite à PySide6-Essentials et modules Qt inutilisés exclus de l'exe.
+- GUI : bascules, capture et Panique rafraîchissent l'affichage immédiatement ; la langue choisie dans la GUI est enregistrée dans la configuration de la session (un réglage ultérieur ne la remet plus à l'ancienne valeur).
+
 ## Non publié — Lot 5 (interface, alignement maquette)
 
 - Interface PySide6 recalée sur la maquette `guardian-ui-mockup` : barre latérale 220 px (marque, navigation 39 px, sélecteur FR/EN, état du pilote), cartes de bascule 83 px, statistiques 64 px, tableau 37 px par ligne avec drapeaux, badges et mini-barres, panneau d'alertes 280 px avec pastille colorée et horodatage, pied de page 22 px.

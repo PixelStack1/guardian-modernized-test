@@ -16,9 +16,10 @@ from menu import livesession as ls
 from util import exehash, health
 from util.driver import CTRL_CLOSE_EVENT, DriverLifecycle
 from util.hotkeys import DEFAULT_HOTKEYS, GlobalHotkeys, hotkey_text
+from util.i18n import t
 
-FRIEND = "81.2.69.160"
-OTHER = "91.198.174.22"
+FRIEND = "192.0.2.160"
+OTHER = "203.0.113.22"
 
 
 class Flag:
@@ -115,9 +116,9 @@ def test_emergency_stop_lifts_everything_and_resume_restores_saved():
     c = ctrl(
         bl, bypass_flag=flag, panic_flag=panic, lock_flag=lock, clock=lambda: 100.0
     )
-    c.auto_entries["5.5.5.5"] = 1000.0
-    c.blocked["5.5.5.5"] = 1000.0
-    c.blocked["6.6.6.6"] = ls.PERMANENT
+    c.auto_entries["192.0.2.5"] = 1000.0
+    c.blocked["192.0.2.5"] = 1000.0
+    c.blocked["192.0.2.6"] = ls.PERMANENT
     c.panic = True
     c.session_lock = True
     c.emergency_stop()
@@ -125,13 +126,13 @@ def test_emergency_stop_lifts_everything_and_resume_restores_saved():
     assert not c.blocked and not c.panic and not c.session_lock and not c.auto_block
     assert panic.value == 0 and lock.value == 0
     assert dict(bl) == {OTHER: "y"}  # data.json intact
-    peer = ls.PeerState(ip="7.7.7.7", first_seen=0.0, last_seen=0.0)
+    peer = ls.PeerState(ip="192.0.2.7", first_seen=0.0, last_seen=0.0)
     peer.level = ls.Level.SUSPECT
     c.auto_block = True
     assert not c.auto_block_if_needed(peer)  # aucun nouveau blocage pendant l'urgence
     c.toggle_emergency()
     assert not c.filtering_paused and not flag.value
-    assert c.blocked == {OTHER: ls.PERMANENT, "5.5.5.5": 1000.0}
+    assert c.blocked == {OTHER: ls.PERMANENT, "192.0.2.5": 1000.0}
 
 
 # -- 2) profils ------------------------------------------------------------------
@@ -154,13 +155,30 @@ def test_profiles_apply_and_persist(tmp_path, key):
     assert current_profile(c) == key
 
 
-def test_profile_resumes_after_emergency(tmp_path):
-    from gui.profiles import apply_profile
+def test_profile_and_toggles_blocked_during_emergency(tmp_path):
+    from gui.profiles import PROFILES, apply_profile
 
     s = make_session(tmp_path)
-    s.ctrl.emergency_stop()
-    apply_profile(s, "public")
-    assert not s.ctrl.filtering_paused
+    c = s.ctrl
+    before = (c.panic, c.session_lock, c.auto_block, c.total_block, c.offender_drop)
+    c.emergency_stop()
+    assert not apply_profile(s, "public")
+    for k in "atvxc":
+        ls.handle_key(k, c, [], s.blocked, s.recorder, lambda _t: "", s.config)
+    assert (c.panic, c.session_lock, c.auto_block, c.total_block, c.offender_drop) == (
+        False,
+        False,
+        False,
+        False,
+        False,
+    )
+    assert c.filtering_paused
+    assert c.toggle_msg and c.toggle_msg[0] == t("live.ev.paused_locked")
+    c.resume_filtering()
+    after = (c.panic, c.session_lock, c.auto_block, c.total_block, c.offender_drop)
+    assert after == before  # rien n'a été écrasé
+    assert apply_profile(s, "public")
+    assert c.panic == PROFILES["public"].panic
     assert not apply_profile(s, "inconnu")
 
 
@@ -435,7 +453,7 @@ def test_r1_shield_cuts_300pps_after_emergency_resume(tmp_path):
     toggle_emergency(s)
     toggle_emergency(s)
     assert s.ctrl.auto_block and not s.ctrl.filtering_paused
-    flood = "176.4.29.17"
+    flood = "198.51.100.17"
     feed(s, peers=[(flood, 300, 40)], seconds=8.0)
     assert flood in s.ctrl.blocked
 
@@ -464,6 +482,34 @@ def test_r3_commit_data_request_cleanup(monkeypatch):
     assert calls == ["session", "session"]
     assert wd.calls == ["register", "unregister"]
     app.session_end_cleanup(lambda: (_ for _ in ()).throw(RuntimeError("x")))
+
+
+def test_cancelled_logoff_shows_protection_stopped(gui, monkeypatch):
+    from gui import app
+    from util import i18n
+
+    w, _s, _api = gui
+    calls = []
+    monkeypatch.setattr(ls, "stop_background", lambda: calls.append("session"))
+    pending = []
+    app.on_session_end(
+        lambda: calls.append("driver"),
+        lambda: w,
+        lambda ms, fn: pending.append((ms, fn)),
+    )
+    assert calls == ["session", "driver"]
+    assert w.status.text() != t("gui.protection_stopped")
+    ((ms, fn),) = pending
+    assert ms > 0
+    fn()  # toujours vivant après le délai : déconnexion annulée
+    assert w.status.text() == t("gui.protection_stopped")
+    assert w.status.objectName() == "statusBad"
+    w.refresh()  # le rafraîchissement ne l'efface pas
+    assert w.status.text() == "Protection arrêtée, relance Guardian"
+    assert i18n.STRINGS["gui.protection_stopped"]["en"] == (
+        "Protection stopped, restart Guardian"
+    )
+    app.on_session_end(None, lambda: None, lambda ms, fn: fn())  # pas de fenêtre
 
 
 def test_r4_spoof_note_on_friends_page(gui):
