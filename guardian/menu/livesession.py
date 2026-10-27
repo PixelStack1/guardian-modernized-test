@@ -93,7 +93,9 @@ OFFENDER_ALERTED_MAX = 1024
 PERMANENT = 0.0
 
 # (horodatage, ip du pair, taille, entrant, port du pair)
-Packet = tuple[float, str, int, bool, int]
+# Lot 4 : un 6e élément facultatif porte les métadonnées complètes (PacketMeta,
+# jamais le contenu) pour la boîte noire.
+Packet = tuple[float, str, int, bool, int] | tuple[float, str, int, bool, int, Any]
 # Nombre max d'IP mémorisées pour ne signaler qu'une fois un refus du bouclier auto.
 GUARD_REPORTED_MAX = 1024
 
@@ -266,6 +268,7 @@ def capture_loop(
     panic_flag: Any = None,
     friends: MutableMapping[str, str] | None = None,
 ) -> None:  # pragma: no cover - nécessite Windows + WinDivert
+    from network.blackbox import drop_reason, meta_from_packet
     from network.sessions import open_windivert, packet_filter
 
     with (
@@ -302,12 +305,33 @@ def capture_loop(
                         frozenset(offenders) if offenders is not None else frozenset()
                     )
                 next_refresh = now + BLOCKLIST_REFRESH
-            handle_packet(
+            sent = handle_packet(
                 w, packet, local, local_total, now, total_on, relay_on, policy
             )
-            with contextlib.suppress(queue.Full):
+            # Après la décision (et l'unique w.send) : métadonnées pour la boîte
+            # noire. Toute erreur ici est ignorée, le paquet est déjà traité.
+            meta: Any = None
+            with contextlib.suppress(Exception):
+                reason = (
+                    ""
+                    if sent
+                    else drop_reason(
+                        inbound,
+                        ip,
+                        local,
+                        local_total,
+                        now,
+                        total_on,
+                        relay_on and is_rockstar_server(ip),
+                        policy,
+                    )
+                )
+                meta = meta_from_packet(packet, now, sent, reason)
+            with contextlib.suppress(Exception):
                 port = packet.src_port if inbound else packet.dst_port
-                out.put_nowait((now, ip, len(packet.payload), inbound, int(port or 0)))
+                out.put_nowait(
+                    (now, ip, len(packet.payload), inbound, int(port or 0), meta)
+                )
 
 
 # -- compteur de joueurs en direct ------------------------------------------------
@@ -1227,6 +1251,7 @@ def handle_key(
     recorder: Any,
     prompt: Callable[[str], str],
     config: Any = None,
+    blackbox: Any = None,
 ) -> None:
     """Action d'une touche de la vue en direct. Les bascules A/T n'affichent aucune
     invite : l'état change, est sauvegardé et la frame suivante l'affiche."""
@@ -1301,6 +1326,14 @@ def handle_key(
         set_toggle_msg(
             ctrl, t("live.ev.cut_toggled", state=status_word(ctrl.offender_drop))
         )
+    elif key == "k":
+        # Boîte noire (lot 4) : capture des N s avant/après, écrite plus tard.
+        if blackbox is None:
+            ctrl.events.append(t("live.ev.kick_off"))
+        elif blackbox.trigger("manuel"):
+            ctrl.events.append(t("live.ev.kick_armed", seconds=blackbox.seconds))
+        else:
+            ctrl.events.append(t("live.ev.kick_busy"))
     elif key == "e":
         if recorder.active:
             recorder.stop()
@@ -1393,8 +1426,12 @@ class BackgroundSession:
         config: Any = None,
         blocked: MutableMapping[str, float] | None = None,
         new_players: Any = None,
+        blackbox: Any = None,
     ) -> None:
         import threading
+
+        # network.blackbox.BlackBox (lot 4) ou None.
+        self.blackbox = blackbox
 
         # NewPlayerTracker (alerte + journal) ou None.
         self.new_players = new_players
@@ -1433,8 +1470,11 @@ class BackgroundSession:
     def step(self, timeout: float = 0.02) -> None:
         """Un paquet au plus, puis évaluation si l'échéance est passée."""
         try:
-            ts, ip, size, inbound, port = self.packets.get(timeout=timeout)
+            item = self.packets.get(timeout=timeout)
+            ts, ip, size, inbound, port = item[:5]
             with self.lock:
+                if len(item) > 5 and self.blackbox is not None:
+                    self._blackbox_add(item[5])
                 self.recorder.write(ts, ip, size, inbound)
                 note_player(self.counter, ip, inbound)
                 if self.new_players is not None:
@@ -1444,8 +1484,11 @@ class BackgroundSession:
                         alert = None
                     if alert:
                         self.ctrl.events.append(alert)
+                offender_line = None
                 with contextlib.suppress(Exception):
-                    self.ctrl.offender_check(ip, inbound)
+                    offender_line = self.ctrl.offender_check(ip, inbound)
+                if offender_line:
+                    self._blackbox_trigger("recidiviste", ts)
                 if inbound:
                     self.monitor.add_packet(ip, size, ts, port)
         except queue.Empty:
@@ -1458,11 +1501,34 @@ class BackgroundSession:
             peers = self.monitor.evaluate(now)
             for p in peers:
                 try:
-                    self.ctrl.auto_block_if_needed(p)
+                    if self.ctrl.auto_block_if_needed(p):
+                        self._blackbox_trigger("bouclier", now)
                 except Exception:
                     logger.exception("bouclier auto : évaluation impossible")
+            if self.blackbox is not None:
+                with contextlib.suppress(Exception):
+                    self.blackbox.tick(now)
             self.monitor.prune(now)
             self.peers, self.now = peers, now
+
+    def _blackbox_add(self, meta: Any) -> None:
+        """Métadonnées -> boîte noire ; un rejet verrou/récidiviste déclenche une
+        capture automatique (limitée par motif). Jamais d'exception."""
+        if meta is None or self.blackbox is None:
+            return
+        with contextlib.suppress(Exception):
+            self.blackbox.add(meta)
+            if not meta.passed and meta.reason in ("verrou", "recidiviste"):
+                self._blackbox_trigger(meta.reason, meta.ts)
+
+    def _blackbox_trigger(self, label: str, now: float) -> None:
+        if self.blackbox is None:
+            return
+        with contextlib.suppress(Exception):
+            if self.blackbox.trigger(label, now, auto=True):
+                self.ctrl.events.append(
+                    t("live.ev.kick_auto", reason=label, seconds=self.blackbox.seconds)
+                )
 
     def _pump(self) -> None:
         next_eval = time.monotonic()
@@ -1486,6 +1552,9 @@ class BackgroundSession:
             self._thread.join(timeout=2)
         with contextlib.suppress(Exception):
             self.recorder.stop()
+        if self.blackbox is not None:
+            with contextlib.suppress(Exception):
+                self.blackbox.flush()
         for close in self.closers[:1]:
             with contextlib.suppress(Exception):
                 close()
@@ -1616,7 +1685,14 @@ def live_view(
             prompt = make_prompt(screen, prompt_frame, cols)
             try:
                 handle_key(
-                    key, ctrl, peers, session.blocked, rec_obj, prompt, session.config
+                    key,
+                    ctrl,
+                    peers,
+                    session.blocked,
+                    rec_obj,
+                    prompt,
+                    session.config,
+                    blackbox=getattr(session, "blackbox", None),
                 )
             except (EOFError, KeyboardInterrupt):
                 raise
@@ -1631,6 +1707,8 @@ def live_view(
 
 
 def _create_session() -> BackgroundSession:  # pragma: no cover - Windows uniquement
+    from network.blackbox import CONFIG_KEY as RECORDING_KEY
+    from network.blackbox import BlackBox, clamp_seconds
     from network.recorder import MetadataRecorder
     from network.sessions import extra_ports_enabled
 
@@ -1726,6 +1804,7 @@ def _create_session() -> BackgroundSession:  # pragma: no cover - Windows unique
         config=config,
         blocked=blocked,
         new_players=make_new_player_tracker(),
+        blackbox=BlackBox(seconds=clamp_seconds(config.data.get(RECORDING_KEY))),
     )
 
 

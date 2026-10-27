@@ -21,6 +21,8 @@ class ConfigDataType(TypedDict):
     language: NotRequired[str]
     # Vue Session en direct : relais Rockstar « autoriser » (défaut si absent) ou « bloquer ».
     rockstar_relay: NotRequired[str]
+    # Boîte noire (lot 4) : secondes avant/après un kick enregistrées (défaut 30).
+    recording_seconds: NotRequired[int]
 
 
 class ConfigData(metaclass=Singleton):

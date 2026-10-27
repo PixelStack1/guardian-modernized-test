@@ -315,11 +315,27 @@ STRINGS: dict[str, dict[str, str]] = {
     },
     "live.players_full": {"fr": "≥{max}", "en": "≥{max}"},
     "live.no_peers": {"fr": "(aucun pair connecté)", "en": "(no connected peer)"},
+    "live.ev.kick_armed": {
+        "fr": "Boîte noire : capture ±{seconds} s programmée (écrite dans {seconds} s)",
+        "en": "Blackbox: ±{seconds}s capture scheduled (written in {seconds}s)",
+    },
+    "live.ev.kick_auto": {
+        "fr": "Boîte noire : capture auto ({reason}), ±{seconds} s",
+        "en": "Blackbox: auto capture ({reason}), ±{seconds}s",
+    },
+    "live.ev.kick_busy": {
+        "fr": "Boîte noire : une capture couvre déjà ce moment",
+        "en": "Blackbox: a capture already covers this moment",
+    },
+    "live.ev.kick_off": {
+        "fr": "Boîte noire indisponible",
+        "en": "Blackbox unavailable",
+    },
     "live.keys": {
-        "fr": "[B]loq [P]seudo [D]ébloq [A]uto [T]otal [V]errou [F]ami "
-        "[X]panique [E]nreg [↑↓+-] [R]etour [Q]uit",
-        "en": "[B]lock [P]Nick [D]Unblock [A]uto [T]otal [V]Lock [F]riend "
-        "[X]Panic [E]Rec [↑↓+-] [R]eturn [Q]uit",
+        "fr": "[B]loq [P]seudo [D]ébl [A]uto [T]otal [V]errou [F]ami "
+        "[X]panic [E]nreg [K]ick [↑↓] [R]etour [Q]uit",
+        "en": "[B]lock [P]Nk [D]Unblk [A]uto [T]otal [V]Lock [F]riend "
+        "[X]Panic [E]Rec [K]ick [↑↓] [R]eturn [Q]uit",
     },
     "live.relay_status": {
         "fr": "Relais Rockstar : {state} (touche L ; « bloquer » jette seulement le jeu "
