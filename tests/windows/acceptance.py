@@ -15,6 +15,7 @@ Les fonctions pures en tête de fichier sont testées sous Linux
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import hashlib
 import json
@@ -109,7 +110,7 @@ class Report:
         """ok=None : non vérifiable ici (limite documentée), pas un échec."""
         state = "SKIP" if ok is None else ("PASS" if ok else "FAIL")
         self.checks.append({"name": name, "result": state, "detail": detail})
-        print(f"[{state}] {name}{' — ' + detail if detail else ''}", flush=True)
+        print(f"[{state}] {name}{' - ' + detail if detail else ''}", flush=True)
         return bool(ok)
 
     @property
@@ -344,7 +345,7 @@ def check_driver_gone(rep: Report, name: str) -> None:  # pragma: no cover
     )
     rep.metrics[f"{name}.driver_gone_ms"] = round(ms)
     rep.check(
-        f"{name}: WinDivert gone ≤ {threshold('DRIVER_GONE_MS')} ms",
+        f"{name}: WinDivert gone <= {threshold('DRIVER_GONE_MS')} ms",
         ok,
         sc_query().strip()[:300],
     )
@@ -355,7 +356,7 @@ def measure_splash(run: Run, rep: Report) -> None:  # pragma: no cover
     rep.metrics["splash_ms"] = round(ms)
     lim = threshold("SPLASH_MS")
     rep.check(
-        f"startup: bootloader splash visible ≤ {lim} ms",
+        f"startup: bootloader splash visible <= {lim} ms",
         ok and ms <= lim,
         f"{ms:.0f} ms",
     )
@@ -534,6 +535,10 @@ def scenario_logoff(
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - Windows
+    # Console du runner en cp1252 : jamais d'échec d'encodage à l'affichage.
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
     ap = argparse.ArgumentParser()
     ap.add_argument("--exe", required=True)
     ap.add_argument("--out", default="logs/acceptance")
@@ -542,7 +547,14 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - Windows
     out.mkdir(parents=True, exist_ok=True)
     rep, win = Report(), Win()
     rep.metrics["thresholds"] = {k: threshold(k) for k in THRESHOLDS}
-    if driver_active(sc_query()):
+    if os.environ.get("GUARDIAN_CI_PROBE") != "1":
+        # Sans cette variable (et CI=true), l'exe ignore --ci-probe : protection réelle.
+        rep.check(
+            "precondition: env GUARDIAN_CI_PROBE=1 set (probe mode gated)",
+            False,
+            "set GUARDIAN_CI_PROBE: '1' on the workflow step",
+        )
+    elif driver_active(sc_query()):
         rep.check(
             "precondition: WinDivert not loaded before the bench", False, sc_query()
         )
