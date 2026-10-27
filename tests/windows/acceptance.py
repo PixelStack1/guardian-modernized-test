@@ -380,12 +380,72 @@ def wait_until(
         time.sleep(step)
 
 
-def read_probe(path: Path) -> dict[str, Any]:
-    try:
-        data = json.loads(path.read_text("utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+PROBE_READ_MS = 2000  # relecture bornée de la sonde (remplacement atomique en cours)
+PROBE_READ_STEP = 0.05
+
+
+def read_probe(
+    path: Path, timeout_ms: int = PROBE_READ_MS, quiet_missing: bool = False
+) -> dict[str, Any]:
+    """Lit la sonde ; réessaie (borné) si la lecture échoue ou est vide/invalide.
+
+    Chaque échec est journalisé (jamais avalé en silence), sauf le fichier encore
+    absent au démarrage (quiet_missing). Renvoie {} si rien de valide dans le délai.
+    """
+    t0 = time.perf_counter()
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            data = json.loads(path.read_text("utf-8"))
+            if isinstance(data, dict) and data.get("pid"):
+                return data
+            why = f"empty/invalid content ({type(data).__name__})"
+        except FileNotFoundError as e:
+            why = "" if quiet_missing else f"FileNotFoundError: {e.strerror}"
+        except Exception as e:
+            why = f"{type(e).__name__}: {e}"
+        elapsed = (time.perf_counter() - t0) * 1000
+        if why:
+            print(
+                f"[PROBE] {path.name} read failed (attempt {attempt}, "
+                f"{elapsed:.0f} ms): {why}",
+                flush=True,
+            )
+        if elapsed >= timeout_ms:
+            return {}
+        time.sleep(PROBE_READ_STEP)
+
+
+def probe_baseline_ok(data: dict[str, Any], need: tuple[str, ...]) -> str:
+    """'' si la sonde est une base utilisable, sinon la raison (base vide)."""
+    if not data:
+        return "probe unreadable or empty"
+    if not isinstance(data.get("fired"), list):
+        return "probe has no 'fired' list"
+    for key in need:
+        v = data.get(key)
+        if key == "state" and not (isinstance(v, dict) and v):
+            return "probe 'state' empty"
+        if v is None:
+            return f"probe has no {key!r}"
+    return ""
+
+
+def baseline(
+    rep: Report, run: Run, name: str, need: tuple[str, ...] = ()
+) -> dict[str, Any] | None:
+    """Base de comparaison lue d'une seule sonde valide ; base vide => FAIL explicite."""
+    data = run.state()
+    why = probe_baseline_ok(data, need)
+    if why:
+        rep.check(
+            f"{name}: probe baseline",
+            False,
+            f"empty baseline refused: {why} ({run.probe.name}, keys={sorted(data)})",
+        )
+        return None
+    return data
 
 
 def pid_alive(pid: int) -> bool:  # pragma: no cover - Windows
@@ -407,9 +467,15 @@ class Run:  # pragma: no cover - Windows
         self.parent = self.p.pid
         self.child = 0
         self.hwnd = 0
+        self.seen = False  # sonde déjà lue avec succès au moins une fois
 
     def state(self) -> dict[str, Any]:
-        return read_probe(self.probe)
+        if not self.seen:  # démarrage : fichier pas encore écrit, une seule lecture
+            data = read_probe(self.probe, 0, quiet_missing=True)
+        else:
+            data = read_probe(self.probe)
+        self.seen = self.seen or bool(data)
+        return data
 
     def wait_ready(self) -> bool:
         ok, _ = wait_until(
@@ -494,7 +560,10 @@ def scenario_main(
         measure_splash(run, rep)
         if not run.wait_ready():
             return
-        s = run.state()
+        b = baseline(rep, run, "main", ("hotkeys", "hotkey_ids", "hotkey_keys"))
+        if b is None:
+            return
+        s = b
         # 4. SHA256 affiché == Get-FileHash de l'artefact.
         shown = str(s.get("exe_sha256_shown", "")).lower()
         real = sha256_of(exe)
@@ -519,7 +588,10 @@ def scenario_main(
             return list(run.state().get("fired", []))
 
         def post(action: str) -> bool:
-            n = len(fired())
+            b = baseline(rep, run, f"hotkey {action}")
+            if b is None:
+                return False
+            n = len(b["fired"])
             mods, vk = keys[action]
             win.post_thread(
                 tid, run.child, WM_HOTKEY, ids[action], hotkey_lparam(mods, vk)
@@ -548,7 +620,10 @@ def scenario_main(
         ok2, _ = wait_until(lambda: st().get("paused") is False, 2000)
         rep.check("hotkey Ctrl+Alt+F12 again: filtering resumed", ok and ok2)
         for action in ("panic", "auto", "total", "lock"):
-            before = st().get(action)
+            b = baseline(rep, run, f"hotkey {action} state", ("state",))
+            if b is None:
+                continue
+            before = b["state"].get(action)
             ok = post(action)
             changed, _ = wait_until(flipped(action, before), 2000)
             avail = run.state().get("auto_block_available", False)
@@ -581,24 +656,29 @@ def scenario_main(
         # 3c. SendInput réel (fenêtre de Guardian au premier plan).
         fg = win.foreground(run.hwnd, run.child) if run.hwnd else False
         rep.metrics["foreground_ok"] = fg
-        n0, s0 = len(fired()), dict(st())
-        sent = 0
-        for letter in "XATV":
-            sent += win.send_keys(altgr_sequence(letter), run.child)
-        time.sleep(1.5)
-        rep.metrics["altgr_events_injected"] = sent
-        f1, s1 = fired(), dict(st())
-        quiet = len(f1) == n0 and s1 == s0
-        detail = f"injected={sent} foreground={fg}"
-        if sent and not quiet:
-            detail += "; " + hotkey_diff(f1[n0:], s0, s1)
-        rep.check(
-            "AltGr+X/A/T/V (real SendInput, Guardian foreground): no hotkey fired",
-            quiet if sent else None,
-            detail,
-        )
+        b = baseline(rep, run, "AltGr+X/A/T/V", ("state",))
+        if b is not None:
+            n0, s0 = len(b["fired"]), dict(b["state"])
+            sent = 0
+            for letter in "XATV":
+                sent += win.send_keys(altgr_sequence(letter), run.child)
+            time.sleep(1.5)
+            rep.metrics["altgr_events_injected"] = sent
+            f1, s1 = fired(), dict(st())
+            quiet = len(f1) == n0 and s1 == s0
+            detail = f"injected={sent} foreground={fg}"
+            if sent and not quiet:
+                detail += "; " + hotkey_diff(f1[n0:], s0, s1)
+            rep.check(
+                "AltGr+X/A/T/V (real SendInput, Guardian foreground): no hotkey fired",
+                quiet if sent else None,
+                detail,
+            )
         azerty_altgr(rep, win, run, fired, st)
-        n1 = len(fired())
+        b = baseline(rep, run, "Ctrl+Alt+F12", ())
+        if b is None:
+            return
+        n1 = len(b["fired"])
         sent = win.send_keys(ctrl_alt_f12_sequence(), run.child)
         got, ms = wait_until(lambda: len(fired()) > n1, threshold("HOTKEY_MS"))
         if got:
@@ -658,7 +738,10 @@ def azerty_altgr(
         return
     chars = {k: win.altgr_char(ord(k), hkl) for k in AZERTY_ALTGR_KEYS}
     fg = win.foreground(run.hwnd, run.child)
-    n0, s0 = len(fired()), dict(st())
+    b = baseline(rep, run, "AltGr AZERTY", ("state",))
+    if b is None:
+        return
+    n0, s0 = len(b["fired"]), dict(b["state"])
     sent = sum(win.send_keys(altgr_sequence(k), run.child) for k in AZERTY_ALTGR_KEYS)
     time.sleep(1.5)
     rep.metrics["azerty_altgr_injected"] = sent
@@ -805,6 +888,8 @@ def relaunch_after_kill(
             "RUNNING" in sc,
             " ".join(sc.split())[:160] + f"; before relaunch: {left}",
         )
+        if baseline(rep, run, "relaunch", ("hotkeys", "hotkey_ids")) is None:
+            return
         hk = run.state().get("hotkeys", {})
         rep.check(
             "relaunch: RegisterHotKey succeeded for all 5",
