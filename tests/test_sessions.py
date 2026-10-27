@@ -149,7 +149,7 @@ def test_ip_collector_counts_only_non_service_inbound(packet_factory):
         packet_factory(src=STRANGER, payload=b"\0" * 300, inbound=False),
     ]
     handle.__iter__.return_value = iter(pkts)
-    with mock.patch.object(s.parentwatch, "watched_manager") as mgr:
+    with mock.patch.object(s, "Manager") as mgr:
         mgr.return_value.list.return_value = []
         mgr.return_value.dict.return_value = {}
         c = s.IPCollector(1, packet_count_min_threshold=2)

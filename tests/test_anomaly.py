@@ -88,8 +88,7 @@ def test_monitor_never_crashes(events):
 
 
 def test_no_alert_during_learning_or_steady():
-    # Règle x5 seule : la règle absolue du lot 3 (shield_pps) est mise au maximum.
-    mon = SessionMonitor(shield_pps=1000)
+    mon = SessionMonitor()
     feed(mon, "203.0.113.1", 500, 0, 10)  # gros débit mais en apprentissage
     assert all(p.level == Level.NORMAL for p in mon.evaluate(10))
     mon = SessionMonitor()
@@ -100,7 +99,7 @@ def test_no_alert_during_learning_or_steady():
 
 
 def test_burst_targeted_orange_then_red():
-    mon = SessionMonitor(shield_pps=1000)  # règle x5 isolée du bouclier absolu
+    mon = SessionMonitor()
     t = learned(mon, ["203.0.113.1", "203.0.113.2", "203.0.113.3"])
     # 203.0.113.1 passe de 30 à 200 paquets/s (~6.7x) ; les autres restent normaux.
     feed(mon, "203.0.113.2", 30, t, t + 10)
@@ -127,7 +126,7 @@ def test_severe_burst_is_red_immediately():
 
 
 def test_session_wide_burst_is_not_flagged():
-    mon = SessionMonitor(shield_pps=1000)  # règle x5 isolée du bouclier absolu
+    mon = SessionMonitor()
     ips = ["203.0.113.1", "203.0.113.2", "203.0.113.3", "203.0.113.4"]
     t = learned(mon, ips)
     for ip in ips:

@@ -51,18 +51,6 @@ sends packets.
   size. Abnormal bursts turn the row **orange** (unusual) then **red** (suspicious). ON/off
   states are shown in green/red.
 - **Auto shield** (off by default, `A`): blocks red-level IPs only, for **7 days**. `D` unblocks.
-  Absolute rate rule (`shield_pps` default 80, `shield_seconds` default 5, in `data.json`): an IP turns
-  red when it averages more than `shield_pps` pkt/s over `shield_seconds` (**more than 400 packets in
-  5 s** by default), with at least N-1 of the last N one-second slices (N = ceil(`shield_seconds`),
-  min 3) each above **75 %** of the limit, and the IP seen for at least `shield_seconds`. It is also
-  cut on a **flood** (average above 3x the limit) or when its 8192-timestamp memory fills up after
-  at least 1 s. A short dip does not reset the count. A burst starting from a low rate is cut
-  after a **minimum delay of 3 s** (floods excepted: they are cut faster); an IP already at 79-80 pkt/s that ramps up may be cut faster,
-  by design; a very strong flood is cut too. Friends, the whitelist, Rockstar/Take-Two and Azure
-  are never cut.
-  ⚠️ **Known limit**: 3 s of silence then 2 s at up to about 600 pkt/s (at most 1200 packets per
-  5 s), in a loop, does not trigger a cut (only 2 of 5 slices busy, flood threshold not reached). The rate alert (above 60 pkt/s by
-  default) still flags it.
 - **Total block** (off by default, `T`): when an IP is blocked, also cuts **outgoing** traffic to
   it for **10 minutes**. ⚠️ **Not a guaranteed kick**; if that player is host, you may be the one
   who leaves.
@@ -284,32 +272,6 @@ pas l'hôte** (l'hôte ne change que s'il quitte la session).
   (filtre appliqué aussi au chargement du fichier). Si les plages Rockstar/Azure n'ont pas pu être
   chargées, le bouclier auto reste désactivé et les entrées du fichier ne sont pas appliquées.
   Les IP orange ne sont jamais bloquées automatiquement.
-- **Règle de débit absolue du bouclier** (en plus de la règle x5, s'applique aussi pendant
-  l'apprentissage), réglable dans `data.json` : `shield_pps` (défaut 80, borné 20–1000) et
-  `shield_seconds` (défaut 5, borné 1–60). Une IP passe au rouge, et est donc coupée si le bouclier
-  auto est actif, dans l'un de ces trois cas :
-  - **règle normale** : plus de `shield_pps` paquets/s **en moyenne** sur les `shield_seconds`
-    dernières secondes (par défaut **plus de 400 paquets en 5 s**), au moins N-1 des N dernières
-    tranches d'1 s (N = `shield_seconds` arrondi au-dessus, minimum 3 ; 4 sur 5 par défaut) chacune
-    au-dessus de **75 % du seuil** (plus de 60 paquets par défaut), et IP vue depuis au moins
-    `shield_seconds` ;
-  - **inondation** : plus de 3 × le seuil en moyenne sur la fenêtre (plus de 1200 paquets en 5 s),
-    quel que soit le nombre de tranches ;
-  - **saturation** : la mémoire par IP (8192 horodatages au plus) est pleine avant de couvrir la
-    fenêtre, et l'IP est vue depuis au moins 1 s (un pic de 2 s sous ~4000 paquets/s ne la
-    remplit pas).
-
-  Une petite baisse ponctuelle ne remet pas le compteur à zéro. Une rafale partant d'un débit bas
-  est coupée avec un **délai minimal de 3 s** (sauf inondation, coupée plus vite). Une IP déjà à 79-80
-  paquets/s qui s'emballe peut être coupée **plus vite**, presque immédiatement : c'est voulu, sa
-  moyenne sur 5 s dépasse déjà la limite. Une **inondation très forte** (plus de 1200 paquets en
-  5 s) est coupée elle aussi, en général en moins de 1,5 s. Jamais pour les amis, la liste
-  blanche, Rockstar/Take-Two ou Azure.
-
-  ⚠️ **Limite connue** : 3 s de silence puis 2 s jusqu'à environ 600 paquets/s (au plus 1200 paquets
-  par 5 s), en boucle, ne déclenche pas la coupure (seulement 2 tranches occupées sur 5, seuil
-  d'inondation non atteint). L'alerte de débit
-  (au-delà de 60 paquets/s par défaut) le signale quand même.
 - **Bouclier manuel** (`B`) : bloque n'importe quelle IP choisie et l'écrit **de façon permanente**
   dans la liste noire de `data.json` (avec date et pseudo) ; `D` pour débloquer (retire aussi
   l'IP de la liste noire, ou de `auto_block.json` pour un blocage auto).
@@ -331,41 +293,6 @@ pas l'hôte** (l'hôte ne change que s'il quitte la session).
 - Enregistrement : uniquement des métadonnées (horodatage, IP, taille, sens), jamais le contenu,
   dans `%LOCALAPPDATA%\Guardian\enregistrements\`. Nouveau fichier tous les 1 000 000 lignes /
   100 Mo, arrêt automatique après 5 fichiers.
-
-### Relais Rockstar / Rockstar relay (touche L)
-
-- **autoriser** (par défaut) : comportement inchangé. **bloquer** : jette UNIQUEMENT le jeu relayé
-  par Rockstar, défini par l'heuristique suivante (toutes les conditions) : IP des plages officielles
-  Rockstar/Take-Two + UDP + port de jeu 6672 (61455-61458 exclus) + taille hors heartbeat/matchmaking
-  connus (12, 18, 63, 191, 207, 223, 239, et réponses 45, 125, 205). Authentification, Social Club,
-  HTTPS (TCP) et matchmaking ne sont **jamais** jetés. Heuristique sur métadonnées, pas une certitude.
-- EN: **allow** (default) keeps the current behavior; **block** drops only Rockstar-relayed UDP 6672
-  game traffic (same rules), never auth / Social Club / HTTPS / matchmaking.
-
-### Journal des nouveaux joueurs / New-player journal
-
-Chaque nouvelle IP (hors serveurs Rockstar) : alerte dans la vue + ligne (heure, IP, pays local)
-dans `%LOCALAPPDATA%\Guardian\journal\joueurs.log`. Rotation : 1 Mo par fichier, 1 fichier actif
-+ 3 anciens, soit **au plus ~4 Mo sur le disque** (1 Mo × 4 fichiers). Aucun contenu de paquet.
-EN: alert + log line per new IP; bounded to **~4 MB on disk** (1 MB × 4 files).
-
-### Mode rejeu / Replay mode (QA, Linux)
-
-`python -m guardian.replay <enregistrement.csv> [--relais bloquer] [--bouclier] [--lang en] [--journal DOSSIER]`
-rejoue un enregistrement sans WinDivert et affiche les décisions. Les tests tournent aussi sans
-`pydivert` installé (faux module minimal dans `tests/_fakes`, chargé seulement si besoin).
-
-## Données hors ligne / Offline data
-
-Aucun appel réseau à l'exécution. / No network calls at runtime.
-
-- Pays / Country : `guardian/util/geoip_ipv4.bin.gz` — sapics/ip-location-db
-  « geo-whois-asn-country », **CC0-1.0** (https://github.com/sapics/ip-location-db).
-- VPN / hébergeurs / hosting : `guardian/util/vpn_ipv4.bin.gz` — sapics/ip-location-db
-  « origin-asn », **PDDL-1.0**, instantané du 2026-10-27 (`util/vpn.py` : `SNAPSHOT`),
-  liste d'AS dans `tools/build_vpn.py`. Indicatif seulement / indicative only.
-
-Textes des licences / license texts : [`data-licenses/`](data-licenses/).
 
 ## Langue / Language
 

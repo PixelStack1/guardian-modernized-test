@@ -3,22 +3,13 @@ import os
 import struct
 import sys
 import tempfile
-from pathlib import Path
 from unittest import mock
 
+import pydivert
 import pytest
-
-# pydivert réel si installé ; sinon un faux minimal (tests/_fakes) pour Linux.
-try:
-    import pydivert
-except ImportError:  # pragma: no cover - dépend de l'environnement
-    sys.path.insert(0, str(Path(__file__).parent / "_fakes"))
-    import pydivert
 
 # Never write user data (data.json, caches, logs) outside a temp dir during tests.
 os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="guardian-tests-")
-# GUI (lot 5) : tests Qt sans affichage.
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 # Guardian is Windows-only; on other OSes stub the Win32 console APIs so modules import.
 if sys.platform != "win32" and not hasattr(ctypes, "WinDLL"):
