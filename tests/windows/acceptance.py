@@ -518,12 +518,23 @@ def pid_alive(pid: int) -> bool:  # pragma: no cover - Windows
 class Run:  # pragma: no cover - Windows
     """Une instance de l'exe lancée par ce banc (et seulement elle)."""
 
-    def __init__(self, exe: Path, out: Path, name: str, rep: Report, win: Win):
+    def __init__(
+        self,
+        exe: Path,
+        out: Path,
+        name: str,
+        rep: Report,
+        win: Win,
+        env: Mapping[str, str] | None = None,
+    ):
         self.exe, self.name, self.rep, self.win = exe, name, rep, win
         self.probe = out / f"probe_{name}.json"
         self.probe.unlink(missing_ok=True)
         self.t0 = time.time()
-        self.p = subprocess.Popen([str(exe), "--ci-probe", str(self.probe.resolve())])
+        self.p = subprocess.Popen(
+            [str(exe), "--ci-probe", str(self.probe.resolve())],
+            env={**os.environ, **env} if env else None,
+        )
         self.parent = self.p.pid
         self.child = 0
         self.hwnd = 0
@@ -1079,6 +1090,65 @@ def scenario_logoff(
         run.kill_own()
 
 
+FAULT_EXIT_MS = 90000  # démarrage (~30 s) + délai borné du produit (30 s / 10 s)
+# Panne simulée (GUARDIAN_CI_FAULT, mode sonde) -> (code attendu, texte du message)
+CI_FAULTS: dict[str, tuple[int, tuple[str, ...]]] = {
+    "driver_absent": (5, ("RUNNING", "ABSENT")),
+    "driver_blocked": (6, ("driver start: not finished after 30 s",)),
+}
+
+
+def notify_entries(crash_log: str) -> list[str]:
+    """Entrées « where=notify » de ci-crash.log (messages affichés en mode sonde)."""
+    entries = [e for e in crash_log.split("=== ") if e.strip()]
+    return [e.strip() for e in entries if " where=notify " in e.split("\n", 1)[0]]
+
+
+def fault_message_ok(crash_log: str, expected: tuple[str, ...]) -> tuple[bool, str]:
+    """Le message attendu a-t-il été journalisé (notify) ? (ok, extrait)."""
+    for entry in notify_entries(crash_log):
+        if all(x in entry for x in expected):
+            return True, " ".join(entry.split())[:240]
+    return False, "no matching notify entry"
+
+
+def scenario_fault(
+    exe: Path, out: Path, rep: Report, win: Win, fault: str
+) -> None:  # pragma: no cover - Windows
+    """Panne pilote simulée : sortie bornée avec le bon code, message journalisé,
+    aucune boîte d'erreur du chargeur, service retiré."""
+    code, expected = CI_FAULTS[fault]
+    run = Run(exe, out, f"fault_{fault}", rep, win, env={"GUARDIAN_CI_FAULT": fault})
+    try:
+        t0 = time.perf_counter()
+        try:
+            rc: int | None = run.p.wait(timeout=FAULT_EXIT_MS / 1000)
+        except subprocess.TimeoutExpired:
+            rc = None
+        ms = (time.perf_counter() - t0) * 1000
+        rep.metrics[f"fault_{fault}.exit_code"] = rc
+        rep.metrics[f"fault_{fault}.exit_ms"] = round(ms)
+        rep.check(
+            f"ci fault {fault}: exits with code {code} <= {FAULT_EXIT_MS} ms (no hang)",
+            rc == code,
+            f"rc={rc}; {ms:.0f} ms",
+        )
+        crash = ""
+        with contextlib.suppress(OSError):
+            crash = crash_log_path().read_text("utf-8")
+        ok, excerpt = fault_message_ok(crash, expected)
+        rep.check(f"ci fault {fault}: clear message logged (notify)", ok, excerpt)
+        found = dump_dialogs(exe, out, win, f"fault_{fault}")
+        rep.check(
+            f"ci fault {fault}: no 'Unhandled exception'/'Warning' dialog",
+            not found,
+            dialog_check_detail(found),
+        )
+        check_driver_gone(rep, f"fault-{fault}")
+    finally:
+        run.kill_own()
+
+
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - Windows
     # Console du runner en cp1252 : jamais d'échec d'encodage à l'affichage.
     for stream in (sys.stdout, sys.stderr):
@@ -1113,6 +1183,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - Windows
             lambda: scenario_kill(exe, out, rep, win, "child"),
             lambda: scenario_kill(exe, out, rep, win, "parent"),
             lambda: scenario_logoff(exe, out, rep, win),
+            lambda: scenario_fault(exe, out, rep, win, "driver_absent"),
+            lambda: scenario_fault(exe, out, rep, win, "driver_blocked"),
         )
         for fn in scenarios:
             try:

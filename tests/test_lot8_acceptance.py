@@ -732,3 +732,38 @@ def test_kill_child_checks_removal_and_dialogs_strictly():
     assert (
         relaunch.count("\"relaunch: no 'Unhandled exception'/'Warning' dialog\"") == 2
     )
+
+
+def test_fault_message_ok_reads_notify_entries_only():
+    acc = load_bench()
+    log = (
+        "=== 1.0 pid=1 where=target live capture argv=[]\nRUNNING ABSENT\n"
+        "=== 2.0 pid=2 where=notify argv=[]\nDémarrage refusé : le pilote WinDivert "
+        "n'est pas actif (état du service : ABSENT, attendu RUNNING en 10 s).\n"
+    )
+    ok, excerpt = acc.fault_message_ok(log, acc.CI_FAULTS["driver_absent"][1])
+    assert ok and "ABSENT" in excerpt
+    ok, _ = acc.fault_message_ok(log, acc.CI_FAULTS["driver_blocked"][1])
+    assert not ok
+    assert acc.fault_message_ok("", ("x",)) == (False, "no matching notify entry")
+
+
+def test_ci_faults_match_product_exit_codes_and_messages():
+    acc = load_bench()
+    from util import cimode
+    from util.i18n import t
+
+    assert set(acc.CI_FAULTS) == set(cimode.FAULTS)
+    assert acc.CI_FAULTS["driver_absent"][0] == 5
+    assert acc.CI_FAULTS["driver_blocked"][0] == 6
+    msg = t("main.driver_not_running", state="ABSENT", s=10)
+    assert all(x in msg for x in acc.CI_FAULTS["driver_absent"][1])
+    from util.driver import DriverStartTimeout
+
+    e = DriverStartTimeout("driver start: not finished after 30 s")
+    assert all(
+        x in t("main.driver_timeout", e=e) for x in acc.CI_FAULTS["driver_blocked"][1]
+    )
+    src = (ROOT / "tests" / "windows" / "acceptance.py").read_text("utf-8")
+    assert 'scenario_fault(exe, out, rep, win, "driver_absent")' in src
+    assert 'scenario_fault(exe, out, rep, win, "driver_blocked")' in src
