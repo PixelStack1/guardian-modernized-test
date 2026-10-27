@@ -574,8 +574,8 @@ def test_shield_settings_clamped():
     ("pps", "seconds", "red"),
     [
         (79, 30, False),
-        (81, 6.0, True),  # débit > 80 dès ~0,99 s, puis 5 s pile
-        (81, 5.9, False),
+        (81, 5.0, True),  # 405 paquets sur 5 s > 400
+        (81, 4.8, False),  # IP observée depuis < 5 s
         (80, 30, False),  # strictement supérieur
         (90, 8, True),
         (90, 4.9, False),
@@ -606,7 +606,7 @@ def test_shield_silence_is_not_sustained():
     for ts, ip, size, _ in burst(PLAYER, 90, 6):
         mon.add_packet(ip, size, ts)
     assert mon.sustained(mon.peers[PLAYER], 6.0)
-    assert not mon.sustained(mon.peers[PLAYER], 6.5)  # débit retombé sous 80
+    assert not mon.sustained(mon.peers[PLAYER], 7.0)  # moyenne 5 s retombée
 
 
 @given(st.lists(st.floats(0, 100, allow_nan=False), max_size=400))
@@ -630,8 +630,8 @@ def _replay(rows, **kw):
         (120, 10, True),
         (79, 20, False),
         (90, 4.9, False),
-        (81, 6.0, True),
-        (81, 5.9, False),
+        (81, 5.0, True),
+        (81, 4.8, False),
     ],
 )
 def test_replay_shield_cut(pps, seconds, cut):
@@ -717,35 +717,60 @@ def first_red(rows, **kw):
     return None
 
 
-def test_cut_81_from_first_second_at_5s_after_rate_established():
+def test_cut_81_from_first_second_at_5s():
     t = first_red(burst(PLAYER, 81, 10))
-    above = 80 / 81  # 81e paquet : débit d'1 s = 81 > 80
-    assert t is not None and above + 5 - 1e-6 <= t < above + 5 + 1 / 81 + 1e-6
+    assert t is not None and 4.9 <= t <= 5.2
 
 
-def test_cut_ramp_30_to_81_counts_only_fast_phase():
+def test_cut_ramp_30_to_81():
     rows = burst(PLAYER, 30, 20) + burst(PLAYER, 81, 6, start=20.0)[1:]
     t = first_red(rows)
-    assert t is not None and t >= 25.0
-    assert t <= 26.0 + 1e-6
+    assert t is not None and 24.9 <= t <= 25.2
 
 
-def test_cut_70_to_81_never_before_5s():
+def test_cut_70_to_81_average_crosses_at_4_55s():
+    # Moyenne 5 s : 81x + 70(5 - x) > 400 dès x > 4,545 s.
     rows = burst(PLAYER, 70, 20) + burst(PLAYER, 81, 10, start=20.0)[1:]
     t = first_red(rows)
-    assert t is not None and t >= 25.0
+    assert t is not None and 24.5 <= t <= 24.8
 
 
 def test_79_stable_never_cut():
     assert first_red(burst(PLAYER, 79, 60)) is None
 
 
-def test_intermittent_resets_period():
+def test_80_stable_never_cut():
+    assert first_red(burst(PLAYER, 80, 60)) is None
+
+
+def test_81_for_4_8s_not_cut():
+    assert first_red(burst(PLAYER, 81, 4.8)) is None
+
+
+def test_small_jolts_do_not_reset():
+    # 81 pkt/s avec une seconde à 76 : la moyenne 5 s reste > 80 -> coupée.
+    rows = burst(PLAYER, 81, 3) + burst(PLAYER, 76, 1, start=3.0)[1:]
+    rows += burst(PLAYER, 90, 4, start=4.0)[1:]
+    t = first_red(rows)
+    assert t is not None and t <= 5.5
+
+
+def test_l1_alternating_60_200_cut_near_5s():
     rows = []
-    for k in range(8):  # 3 s au-dessus, 1 s en dessous, x8
-        rows += burst(PLAYER, 90, 2.99, start=4.0 * k)
-        rows += burst(PLAYER, 30, 0.99, start=4.0 * k + 3.0)
+    for k in range(10):
+        rows += burst(PLAYER, 60 if k % 2 == 0 else 200, 0.999, start=float(k))
+    t = first_red(rows)
+    assert t is not None and 4.9 <= t <= 5.2
+
+
+def test_short_burst_then_silence_never_cut():
+    # 2 s à 250 pkt/s (500 paquets > 400) puis silence : 2 tranches occupées sur 5.
+    rows = burst(PLAYER, 250, 2) + [(20.0, PLAYER, 100, True)]
+    mon = SessionMonitor()
+    for ts, ip, size, _ in rows:
+        mon.add_packet(ip, size, ts)
     assert first_red(rows) is None
+    assert not any(mon.sustained(mon.peers[PLAYER], t / 10) for t in range(0, 200))
 
 
 def test_alert_shows_real_rate_not_capped():
@@ -754,30 +779,46 @@ def test_alert_shows_real_rate_not_capped():
         mon.add_packet(ip, size, ts)
     p = {q.ip: q for q in mon.evaluate(6.0)}[PLAYER]
     assert p.level == Level.SUSPECT and "400" in p.alert
-    assert len(mon.peers[PLAYER].rate_ts) <= an.RATE_CAP
 
 
 def test_rate_memory_bounded():
     mon = SessionMonitor()
-    for i in range(10_000):
-        mon.add_packet(PLAYER, 10, i / 10_000)
-    assert len(mon.peers[PLAYER].rate_ts) == an.RATE_CAP
+    for i in range(100_000):
+        mon.add_packet(PLAYER, 10, i / 100_000)
+    assert len(mon.peers[PLAYER].rate_ts) == mon.rate_cap
 
 
 EARLY = Path(__file__).parent / "fixtures" / "early_lot3.csv"
+EARLY10 = Path(__file__).parent / "fixtures" / "early10.csv"
+T0 = 1767225600
 
 
-def test_replay_early_fixture_cut_at_5s_of_fast_phase():
+def _cut_times(path):
     lines = []
-    with EARLY.open(newline="", encoding="utf-8") as f:
-        res = rp.replay(list(rp.read_rows(f)), emit=lines.append, auto_block=True)
-    assert "198.51.100.5" in res.auto_blocked
-    cut = [ln for ln in lines if "198.51.100.5 bloqu" in ln]
-    ts = float(cut[0][1 : cut[0].index("]")]) - 1767225600
-    assert 25.0 <= ts <= 26.1  # phase rapide à partir de 20 s : jamais avant 25 s
+    with path.open(newline="", encoding="utf-8") as f:
+        rp.replay(list(rp.read_rows(f)), emit=lines.append, auto_block=True)
+    out = {}
+    for ln in lines:
+        if "Bouclier auto" in ln:
+            ip = ln.split(": ", 1)[1].split()[0]
+            out.setdefault(ip, float(ln[1 : ln.index("]")]) - T0)
+    return out
+
+
+def test_replay_early10():
+    cut = _cut_times(EARLY10)
+    assert 4.9 <= cut["198.51.100.81"] <= 5.2
+    assert 24.9 <= cut["198.51.100.5"] <= 25.2
+    assert 24.5 <= cut["198.51.100.6"] <= 24.8  # 70->81 : moyenne > 80 à +4,55 s
+
+
+def test_replay_early_lot3():
+    cut = _cut_times(EARLY)
+    assert 24.5 <= cut["198.51.100.6"] <= 25.2
+    assert 24.9 <= cut["198.51.100.5"] <= 25.2
 
 
 def test_replay_early_fixture_respects_toggle():
-    with EARLY.open(newline="", encoding="utf-8") as f:
+    with EARLY10.open(newline="", encoding="utf-8") as f:
         res = rp.replay(list(rp.read_rows(f)), emit=lambda _l: None)
     assert res.auto_blocked == [] and res.dropped == 0

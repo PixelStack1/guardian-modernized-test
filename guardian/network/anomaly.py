@@ -1,5 +1,6 @@
 """Statistiques par IP et détection d'anomalies pour la vue « Session en direct ».
 
+from bisect import bisect_right
 Module pur (aucune dépendance à pydivert ni à la console) afin d'être testé
 unitairement. Seules des métadonnées sont utilisées : IP, taille du paquet,
 horodatage. Le contenu des paquets n'est jamais lu.
@@ -11,6 +12,7 @@ partir d'enregistrements réels (mode enregistrement, voir network/recorder.py).
 from __future__ import annotations
 
 import statistics
+from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -80,7 +82,6 @@ SHIELD_SECONDS_KEY = "shield_seconds"
 SHIELD_SECONDS = 5.0
 SHIELD_SECONDS_MIN, SHIELD_SECONDS_MAX = 1.0, 60.0
 # Borne mémoire des horodatages de la fenêtre d'1 s, par pair.
-RATE_CAP = 2048
 # Tolérance flottante sur les bornes de fenêtre / durée.
 _EPS = 1e-6
 
@@ -117,6 +118,36 @@ LEVEL_KEYS = {
     Level.INHABITUEL: "level.inhabituel",
     Level.SUSPECT: "level.suspect",
 }
+
+
+class TimeWindow:
+    """Horodatages croissants avec purge incrémentale par la gauche et comptage
+    par bisect (O(log n)). Mémoire bornée par ``cap``."""
+
+    __slots__ = ("_ts", "_head")
+
+    def __init__(self) -> None:
+        self._ts: list[float] = []
+        self._head = 0
+
+    def __len__(self) -> int:
+        return len(self._ts) - self._head
+
+    def add(self, ts: float, older_than: float, cap: int) -> None:
+        if self._ts and ts < self._ts[-1]:
+            ts = self._ts[-1]  # horloge non monotone : on garde l'ordre
+        self._ts.append(ts)
+        self._head = max(
+            bisect_right(self._ts, older_than, self._head), len(self._ts) - cap
+        )
+        if self._head > 1024 and self._head * 2 > len(self._ts):
+            del self._ts[: self._head]
+            self._head = 0
+
+    def count(self, lo: float, hi: float) -> int:
+        """Éléments dans (lo, hi]."""
+        hi_i: int = bisect_right(self._ts, hi, self._head)
+        return hi_i - bisect_right(self._ts, lo, self._head)
 
 
 @dataclass
@@ -190,8 +221,7 @@ class PeerState:
     ports: set[int] = field(default_factory=set)
     # Règle absolue : horodatages de la dernière seconde et début de la période
     # où le débit d'1 s est resté >= shield_pps (None = sous le seuil).
-    rate_ts: deque[float] = field(default_factory=deque)
-    sustain_since: float | None = None
+    rate_ts: TimeWindow = field(default_factory=lambda: TimeWindow())
 
     def learning(self, now: float) -> bool:
         return now - self.first_seen < BASELINE_SECONDS
@@ -206,6 +236,8 @@ class SessionMonitor:
         self.peers: dict[str, PeerState] = {}
         self.shield_pps = clamp_shield_pps(shield_pps)
         self.shield_seconds = clamp_shield_seconds(shield_seconds)
+        # Borne mémoire : au-delà, la moyenne dépasse forcément tout seuil permis.
+        self.rate_cap = int(SHIELD_PPS_MAX * self.shield_seconds) + 2
 
     # -- alimentation ----------------------------------------------------
     def add_packet(
@@ -241,38 +273,39 @@ class SessionMonitor:
             peer.tiny_run_size, peer.tiny_run_length = -1, 0
 
     def _track_rate(self, peer: PeerState, ts: float) -> None:
-        """Débit glissant sur (ts - 1 s, ts]. La période soutenue commence au PREMIER
-        paquet où ce débit dépasse STRICTEMENT shield_pps (jamais au début de la
-        fenêtre : les paquets d'une phase lente ne comptent pas dans la durée) et
-        s'arrête dès qu'il repasse à <= shield_pps. Mémoire bornée (RATE_CAP)."""
-        q = peer.rate_ts
-        q.append(ts)
-        limit = ts - 1.0 + _EPS
-        while q and q[0] <= limit:
-            q.popleft()
-        while len(q) > RATE_CAP:  # borne mémoire (au-delà, débit affiché >= RATE_CAP)
-            q.popleft()
-        if len(q) > self.shield_pps:
-            if peer.sustain_since is None:
-                peer.sustain_since = ts
-        else:
-            peer.sustain_since = None
+        peer.rate_ts.add(ts, ts - self.shield_seconds + _EPS, self.rate_cap)
 
-    @staticmethod
-    def rate(peer: PeerState, now: float) -> int:
-        """Paquets sur (now - 1 s, now] (réel, sauf au-delà de RATE_CAP)."""
-        limit = now - 1.0 + _EPS
-        return sum(1 for ts in peer.rate_ts if limit < ts <= now + _EPS)
+    def _count(self, peer: PeerState, lo: float, hi: float) -> int:
+        """Paquets sur (lo, hi], en O(log n) (bisect)."""
+        return peer.rate_ts.count(lo + _EPS, hi + _EPS)
+
+    def window_count(self, peer: PeerState, now: float) -> int:
+        """Paquets sur (now - shield_seconds, now]."""
+        return self._count(peer, now - self.shield_seconds, now)
+
+    def rate(self, peer: PeerState, now: float) -> int:
+        """Débit moyen réel (paquets/s) sur les shield_seconds dernières secondes."""
+        return round(self.window_count(peer, now) / self.shield_seconds)
 
     def sustained(self, peer: PeerState, now: float) -> bool:
-        """Vrai si le débit d'1 s est > shield_pps sans interruption depuis au moins
-        shield_seconds (exactement, jamais avant) et l'est encore à ``now``."""
-        since = peer.sustain_since
-        if since is None or not peer.rate_ts:
+        """Vrai si, à ``now`` :
+        - l'IP est observée depuis au moins shield_seconds ;
+        - la moyenne sur shield_seconds dépasse STRICTEMENT shield_pps
+          (paquets > shield_pps * shield_seconds) ;
+        - au moins N-1 des N dernières tranches d'1 s (N = shield_seconds arrondi)
+          ont chacune > shield_pps / 2 paquets (une rafale brève puis silence ne
+          suffit pas ; un à-coup ponctuel ne remet rien à zéro)."""
+        if now - peer.first_seen < self.shield_seconds - _EPS:
             return False
-        if self.rate(peer, now) <= self.shield_pps:
+        if self.window_count(peer, now) <= self.shield_pps * self.shield_seconds + _EPS:
             return False
-        return peer.rate_ts[-1] - since >= self.shield_seconds - _EPS
+        slices = max(1, round(self.shield_seconds))
+        busy = sum(
+            1
+            for k in range(slices)
+            if self._count(peer, now - k - 1, now - k) > self.shield_pps / 2
+        )
+        return busy >= max(1, slices - 1)
 
     def _make_room(self, now: float) -> bool:
         """Libère une place en oubliant le pair vu le moins récemment s'il est inactif."""
