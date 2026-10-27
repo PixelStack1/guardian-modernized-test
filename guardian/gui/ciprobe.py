@@ -9,11 +9,60 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
 
 from util.hotkeys import DEFAULT_HOTKEYS
+
+# Liste blanche des clés écrites : rien d'autre ne sort (aucune IP, aucune session).
+ALLOWED_KEYS = frozenset(
+    {
+        "pid",
+        "ppid",
+        "written",
+        "marks",
+        "fired",
+        "hotkey_ids",
+        "hotkey_keys",
+        "hwnd",
+        "title",
+        "status",
+        "status_ok",
+        "protection_stopped",
+        "hotkeys",
+        "exe_sha256_shown",
+        "state",
+        "auto_block_available",
+    }
+)
+HOTKEY_KEYS = frozenset({"registered", "failed", "error", "thread_id"})
+STATE_KEYS = frozenset({"paused", "panic", "auto", "total", "lock"})
+_IP_RE = re.compile(
+    r"\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[0-9a-fA-F]{0,4}:){3,7}[0-9a-fA-F]{0,4}\b"
+)
+
+
+def redact(text: str) -> str:
+    """Masque toute adresse IPv4/IPv6 éventuelle dans un texte d'interface."""
+    return _IP_RE.sub("<ip>", text)
+
+
+def sanitize(data: dict[str, Any]) -> dict[str, Any]:
+    """Applique la liste blanche et masque les IP dans les textes libres."""
+    out = {k: v for k, v in data.items() if k in ALLOWED_KEYS}
+    for k in ("title", "status"):
+        if k in out:
+            out[k] = redact(str(out[k]))
+    if isinstance(out.get("hotkeys"), dict):
+        hk = {k: v for k, v in out["hotkeys"].items() if k in HOTKEY_KEYS}
+        if "error" in hk:
+            hk["error"] = redact(str(hk["error"]))
+        out["hotkeys"] = hk
+    if isinstance(out.get("state"), dict):
+        out["state"] = {k: v for k, v in out["state"].items() if k in STATE_KEYS}
+    return out
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
@@ -91,6 +140,8 @@ class CiProbe:
     def attach(self, win: Any, interval_ms: int = 200) -> None:
         self.win = win
         with contextlib.suppress(Exception):
+            win.show_ci_banner()
+        with contextlib.suppress(Exception):
             win._bridge.fired.connect(self.on_fired)
         from PySide6.QtCore import QTimer
 
@@ -110,4 +161,4 @@ class CiProbe:
             }
         else:
             data = snapshot(self.win, self.fired, self.marks)
-        write_json(self.path, data)
+        write_json(self.path, sanitize(data))

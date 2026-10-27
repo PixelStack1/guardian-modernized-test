@@ -2,6 +2,7 @@
 
 
 ## Lot 8 — banc d'acceptation Windows en CI
+- Durcissement : `--ci-probe` exige `GUARDIAN_CI_PROBE=1` + `CI=true` ; bandeau rouge « MODE TEST CI » ; banc limité au HWND/thread du PID de Guardian ; liste blanche des clés de la sonde.
 
 - `--ci-probe <json>` (test uniquement, inerte sinon) : filtre WinDivert à blanc
   `false` (aucun paquet capturé ni renvoyé) et état de la GUI écrit en JSON.

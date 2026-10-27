@@ -80,6 +80,11 @@ if __name__ == "__main__":
     freeze_support()
     # Lot 8 : banc d'acceptation CI uniquement (inerte sans --ci-probe).
     CI_PROBE = cimode.probe_path(sys.argv)
+    if CI_PROBE is not None and not cimode.probe_allowed():
+        logger.warning(
+            "--ci-probe ignored (needs GUARDIAN_CI_PROBE=1 and CI=true): normal protection"
+        )
+        CI_PROBE = None
     if CI_PROBE is not None:
         cimode.enable_dry()
         logger.warning("CI acceptance probe: dry filter, state -> %s", CI_PROBE)

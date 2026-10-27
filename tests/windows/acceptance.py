@@ -183,9 +183,31 @@ class Win:  # pragma: no cover - Windows
         self.u32.EnumWindows(proto(cb), 0)
         return found
 
+    def owner_pid(self, hwnd: int) -> int:
+        owner = self.wt.DWORD()
+        self.u32.GetWindowThreadProcessId(hwnd, self.ct.byref(owner))
+        return int(owner.value)
+
+    def thread_pid(self, tid: int) -> int:
+        k32 = self.ct.WinDLL("kernel32", use_last_error=True)
+        k32.OpenThread.restype = self.wt.HANDLE
+        h = k32.OpenThread(0x0800, False, tid)  # THREAD_QUERY_LIMITED_INFORMATION
+        if not h:
+            return 0
+        try:
+            return int(k32.GetProcessIdOfThread(h))
+        finally:
+            k32.CloseHandle(h)
+
+    def _own(self, hwnd: int, pid: int) -> None:
+        # Garde-fou : on ne vise QUE la fenêtre de Guardian (PID lancé par ce banc).
+        if not hwnd or not pid or self.owner_pid(hwnd) != pid:
+            raise RuntimeError(f"refused: hwnd {hwnd} not owned by pid {pid}")
+
     def send(
-        self, hwnd: int, msg: int, wp: int, lp: int, timeout_ms: int = 5000
+        self, hwnd: int, pid: int, msg: int, wp: int, lp: int, timeout_ms: int = 5000
     ) -> bool:
+        self._own(hwnd, pid)
         res = self.ct.c_size_t()
         return bool(
             self.u32.SendMessageTimeoutW(
@@ -193,13 +215,17 @@ class Win:  # pragma: no cover - Windows
             )
         )
 
-    def post(self, hwnd: int, msg: int, wp: int = 0, lp: int = 0) -> bool:
+    def post(self, hwnd: int, pid: int, msg: int, wp: int = 0, lp: int = 0) -> bool:
+        self._own(hwnd, pid)
         return bool(self.u32.PostMessageW(hwnd, msg, wp, lp))
 
-    def post_thread(self, tid: int, msg: int, wp: int, lp: int) -> bool:
+    def post_thread(self, tid: int, pid: int, msg: int, wp: int, lp: int) -> bool:
+        if not tid or not pid or self.thread_pid(tid) != pid:
+            raise RuntimeError(f"refused: thread {tid} not in pid {pid}")
         return bool(self.u32.PostThreadMessageW(tid, msg, wp, lp))
 
-    def foreground(self, hwnd: int) -> bool:
+    def foreground(self, hwnd: int, pid: int) -> bool:
+        self._own(hwnd, pid)
         u = self.u32
         u.ShowWindow(hwnd, 9)  # SW_RESTORE
         # Astuce documentée : une frappe Alt autorise SetForegroundWindow.
@@ -209,7 +235,11 @@ class Win:  # pragma: no cover - Windows
         time.sleep(0.3)
         return int(u.GetForegroundWindow()) == hwnd
 
-    def send_keys(self, seq: list[tuple[int, bool]]) -> int:
+    def send_keys(self, seq: list[tuple[int, bool]], pid: int) -> int:
+        # SendInput va à la fenêtre au premier plan : on n'injecte que si c'est Guardian.
+        fg = int(self.u32.GetForegroundWindow())
+        if not fg or not pid or self.owner_pid(fg) != pid:
+            return 0
         arr = (INPUT * len(seq))()
         for i, (vk, down) in enumerate(seq):
             flags = 0 if down else 0x0002  # KEYEVENTF_KEYUP
@@ -284,6 +314,11 @@ class Run:  # pragma: no cover - Windows
             self.child, self.hwnd = int(s.get("pid", 0)), int(s.get("hwnd", 0))
             # Garde-fou « nos PID seulement » : l'enfant doit être celui de notre lancement.
             ok = int(s.get("ppid", 0)) == self.parent and self.child > 0
+            # HWND retrouvé par le PID (EnumWindows), pas cru sur parole.
+            mine = self.win.windows_of(self.child) if ok else []
+            if self.hwnd not in mine:
+                self.hwnd = mine[0] if mine else 0
+            ok = ok and self.hwnd != 0
         self.rep.metrics[f"{self.name}.main_ready_ms"] = round(
             (s.get("marks", {}).get("main_ready", self.t0) - self.t0) * 1000
         )
@@ -361,7 +396,9 @@ def scenario_main(
         def post(action: str) -> bool:
             n = len(fired())
             mods, vk = keys[action]
-            win.post_thread(tid, WM_HOTKEY, ids[action], hotkey_lparam(mods, vk))
+            win.post_thread(
+                tid, run.child, WM_HOTKEY, ids[action], hotkey_lparam(mods, vk)
+            )
             ok, _ = wait_until(
                 lambda: len(fired()) > n and fired()[-1] == action,
                 threshold("HOTKEY_MS"),
@@ -407,12 +444,12 @@ def scenario_main(
             if changed:  # remettre l'état d'origine
                 post(action)
         # 3c. SendInput réel (fenêtre de Guardian au premier plan).
-        fg = win.foreground(run.hwnd) if run.hwnd else False
+        fg = win.foreground(run.hwnd, run.child) if run.hwnd else False
         rep.metrics["foreground_ok"] = fg
         n0, s0 = len(fired()), dict(st())
         sent = 0
         for letter in "XATV":
-            sent += win.send_keys(altgr_sequence(letter))
+            sent += win.send_keys(altgr_sequence(letter), run.child)
         time.sleep(1.5)
         rep.metrics["altgr_events_injected"] = sent
         rep.check(
@@ -421,7 +458,7 @@ def scenario_main(
             f"injected={sent} foreground={fg}",
         )
         n1 = len(fired())
-        sent = win.send_keys(ctrl_alt_f12_sequence())
+        sent = win.send_keys(ctrl_alt_f12_sequence(), run.child)
         got, ms = wait_until(lambda: len(fired()) > n1, threshold("HOTKEY_MS"))
         if got:
             rep.check(
@@ -429,7 +466,7 @@ def scenario_main(
                 fired()[-1] == "emergency",
                 f"{ms:.0f} ms",
             )
-            win.send_keys(ctrl_alt_f12_sequence())  # reprise
+            win.send_keys(ctrl_alt_f12_sequence(), run.child)  # reprise
             wait_until(lambda: st().get("paused") is False, 3000)
         else:
             # Pas d'entrée physique livrée (bureau non interactif) : limite, pas un échec.
@@ -439,7 +476,7 @@ def scenario_main(
                 f"not delivered (injected={sent})",
             )
         # 1b. WM_CLOSE sur la fenêtre principale.
-        win.post(run.hwnd, WM_CLOSE)
+        win.post(run.hwnd, run.child, WM_CLOSE)
         ok, ms = wait_until(run.gone, threshold("EXIT_MS"), 0.1)
         rep.metrics["wm_close_exit_ms"] = round(ms)
         rep.check("WM_CLOSE: process tree exited", ok, f"{ms:.0f} ms")
@@ -471,9 +508,9 @@ def scenario_logoff(
     try:
         if not run.wait_ready():
             return
-        a = win.send(run.hwnd, WM_QUERYENDSESSION, 0, ENDSESSION_LOGOFF)
+        a = win.send(run.hwnd, run.child, WM_QUERYENDSESSION, 0, ENDSESSION_LOGOFF)
         b = win.send(
-            run.hwnd, WM_ENDSESSION, 0, ENDSESSION_LOGOFF
+            run.hwnd, run.child, WM_ENDSESSION, 0, ENDSESSION_LOGOFF
         )  # wParam=FALSE : annulée
         rep.metrics["logoff_messages_delivered"] = [a, b]
         ok, ms = wait_until(
@@ -489,7 +526,7 @@ def scenario_logoff(
         )
         rep.check("cancelled logoff: Guardian still running", not run.gone())
         check_driver_gone(rep, "cancelled-logoff")
-        win.post(run.hwnd, WM_CLOSE)
+        win.post(run.hwnd, run.child, WM_CLOSE)
         ok, _ = wait_until(run.gone, threshold("EXIT_MS"), 0.1)
         rep.check("cancelled logoff: closes cleanly afterwards", ok)
     finally:

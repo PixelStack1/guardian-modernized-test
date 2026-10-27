@@ -56,3 +56,18 @@ mesures sont dans `metrics` de `acceptance.json` : resserrer après quelques run
 - `SendInput` exige un bureau interactif ; s'il n'est pas livré, 3c/3d sont SKIP.
 - Trafic GTA réel et blocage effectif : hors banc (filtre à blanc par conception).
 - UAC (le runner est déjà administrateur) et SmartScreen.
+
+## Durcissement (lot 8)
+
+- `--ci-probe` n'est honoré que si **`GUARDIAN_CI_PROBE=1`** et **`CI=true`** (ou
+  `GITHUB_ACTIONS=true`) sont présents. Sinon il est ignoré (ligne de log) et la
+  protection fonctionne normalement. L'étape de workflow doit poser
+  `GUARDIAN_CI_PROBE: "1"` ; `CI`/`GITHUB_ACTIONS` sont fournis par GitHub Actions.
+- Mode sonde actif : bandeau rouge permanent « MODE TEST CI — protection désactivée »
+  (EN : « CI TEST MODE — protection disabled »).
+- Le banc ne vise que la fenêtre de Guardian retrouvée par son PID (EnumWindows) ;
+  chaque PostMessage/SendMessage vérifie le propriétaire du HWND, PostThreadMessage
+  vérifie que le thread appartient au PID, et SendInput n'est injecté que si la
+  fenêtre au premier plan appartient à ce PID.
+- La sonde applique une liste blanche de clés (`ALLOWED_KEYS`) et masque toute IP
+  dans les textes libres.

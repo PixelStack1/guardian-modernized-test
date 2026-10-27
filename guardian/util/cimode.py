@@ -1,7 +1,9 @@
 """Mode d'acceptation CI (lot 8) — inerte en usage normal.
 
 ``--ci-probe <fichier.json>`` n'est utilisé QUE par le banc Windows de la CI
-(tests/windows/acceptance.py). Sans ce drapeau, rien ne change. Avec lui :
+(tests/windows/acceptance.py). Sans ce drapeau, rien ne change. Le drapeau est IGNORÉ (protection
+normale, une ligne de log) sauf si ``GUARDIAN_CI_PROBE=1`` ET ``CI=true`` (ou
+``GITHUB_ACTIONS=true``) sont présents dans l'environnement. Avec lui :
 
 - mode « à blanc » : le filtre WinDivert devient ``false`` (aucun paquet capturé,
   donc aucun ``w.send`` : le pilote est chargé et un handle est ouvert, mais aucun
@@ -16,6 +18,7 @@ Aucune donnée réseau n'est écrite dans la sonde. Voir docs/ci-acceptance.md.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 CI_PROBE_FLAG = "--ci-probe"
@@ -32,6 +35,18 @@ def probe_path(argv: list[str]) -> Path | None:
     if i + 1 >= len(argv) or not argv[i + 1] or argv[i + 1].startswith("--"):
         return None
     return Path(argv[i + 1])
+
+
+PROBE_ENV = "GUARDIAN_CI_PROBE"
+CI_ENVS = ("CI", "GITHUB_ACTIONS")
+
+
+def probe_allowed(env: Mapping[str, str] | None = None) -> bool:
+    """Le drapeau n'est honoré que si GUARDIAN_CI_PROBE=1 ET (CI ou GITHUB_ACTIONS)=true."""
+    e = os.environ if env is None else env
+    if e.get(PROBE_ENV) != "1":
+        return False
+    return any(e.get(k, "").strip().lower() == "true" for k in CI_ENVS)
 
 
 def enable_dry() -> None:

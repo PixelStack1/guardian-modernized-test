@@ -154,3 +154,47 @@ def test_bench_altgr_letters_are_not_registered_as_ctrl_alt_only():
     for h in DEFAULT_HOTKEYS:
         if ord("A") <= h.vk <= ord("Z"):
             assert h.mods & MOD_SHIFT and h.mods & MOD_CONTROL and h.mods & MOD_ALT
+
+
+def test_probe_allowed_only_with_ci_env():
+    ok = {"GUARDIAN_CI_PROBE": "1", "CI": "true"}
+    assert cimode.probe_allowed(ok)
+    assert cimode.probe_allowed({"GUARDIAN_CI_PROBE": "1", "GITHUB_ACTIONS": "true"})
+    assert not cimode.probe_allowed({})
+    assert not cimode.probe_allowed({"CI": "true"})
+    assert not cimode.probe_allowed({"GUARDIAN_CI_PROBE": "1"})
+    assert not cimode.probe_allowed({"GUARDIAN_CI_PROBE": "0", "CI": "true"})
+    assert not cimode.probe_allowed({"GUARDIAN_CI_PROBE": "1", "CI": "false"})
+    src = (ROOT / "guardian" / "__main__.py").read_text("utf-8")
+    assert src.index("probe_allowed()") < src.index("cimode.enable_dry()")
+
+
+def test_probe_json_keys_whitelist_and_no_ip(win, tmp_path):
+    from gui.ciprobe import ALLOWED_KEYS, HOTKEY_KEYS, STATE_KEYS, CiProbe, sanitize
+
+    w, _api = win
+    path = tmp_path / "probe.json"
+    p = CiProbe(path, {"python_start": 1.0})
+    p.attach(w, interval_ms=10_000)
+    w.status.setText("Bloqué 203.0.113.7 et 2001:db8::1:2 à 12:30:45")
+    p.write()
+    data = json.loads(path.read_text("utf-8"))
+    assert set(data) <= ALLOWED_KEYS
+    assert set(data["hotkeys"]) <= HOTKEY_KEYS
+    assert set(data["state"]) <= STATE_KEYS
+    raw = path.read_text("utf-8")
+    assert "203.0.113" not in raw and "2001:db8" not in raw
+    assert "12:30:45" in data["status"]
+    assert sanitize({"sessions": [1], "ips": ["1.2.3.4"], "pid": 1}) == {"pid": 1}
+
+
+def test_ci_banner_shown_in_probe_mode_and_i18n(win, tmp_path):
+    from gui.ciprobe import CiProbe
+    from util.i18n import STRINGS
+
+    w, _api = win
+    assert w.ci_banner is None  # usage normal : aucun bandeau
+    CiProbe(tmp_path / "p.json", {}).attach(w, interval_ms=10_000)
+    assert w.ci_banner is not None
+    assert w.ci_banner.text() == "MODE TEST CI — protection désactivée"
+    assert STRINGS["gui.ci_banner"]["en"] == "CI TEST MODE — protection disabled"
