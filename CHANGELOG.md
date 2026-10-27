@@ -1,5 +1,13 @@
 # Changelog
 
+## Non publié — Lot 5 (interface, alignement maquette)
+
+- Interface PySide6 recalée sur la maquette `guardian-ui-mockup` : barre latérale 220 px (marque, navigation 39 px, sélecteur FR/EN, état du pilote), cartes de bascule 83 px, statistiques 64 px, tableau 37 px par ligne avec drapeaux, badges et mini-barres, panneau d'alertes 280 px avec pastille colorée et horodatage, pied de page 22 px.
+- Réglages en grille 3×3 (curseurs, puces pays, contrôles segmentés).
+- Noms de pays sur une ligne (points de suspension).
+- `tools/compare_mockup.py` génère les comparaisons côte à côte dans `docs/compare/`.
+- Aucun changement de la logique réseau.
+
 ## Non publié — Lot 3 (filtres d'information)
 
 - Pays : FR, BE, CH, CA (+ `trusted_countries` de data.json) jamais bloqués ; autres pays

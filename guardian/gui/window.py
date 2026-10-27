@@ -1,25 +1,21 @@
-"""Fenêtre principale PySide6. Lecture par QTimer, jamais dans la capture."""
+"""Fenêtre principale PySide6. Lecture par QTimer, jamais dans la capture.
+
+Grille, marges et tailles reprises du CSS de la maquette (guardian-ui-mockup) :
+barre latérale 220 px, contenu 14/16/10 px, écart 12 px, cartes rayon 12 px.
+"""
 
 from __future__ import annotations
 
+import html
+import time
 from collections import deque
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QPointF, QSize, Qt, QTimer
-from PySide6.QtGui import (
-    QColor,
-    QIcon,
-    QKeySequence,
-    QPainter,
-    QPaintEvent,
-    QPen,
-    QPixmap,
-    QShortcut,
-)
+from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtGui import QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -28,8 +24,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QStackedWidget,
     QTableWidget,
@@ -39,99 +37,104 @@ from PySide6.QtWidgets import (
 )
 
 from gui import countries, style
-from gui.core import GuiActions, Settings, Snapshot, take_snapshot
+from gui.core import GuiActions, Row, Settings, Snapshot, take_snapshot
+from gui.widgets import (
+    HEAD_H,
+    ROW_H,
+    AlertDelegate,
+    FlowLayout,
+    PlayersDelegate,
+    Sparkline,
+    Switch,
+    SwitchRow,
+    flag_icon,
+    font,
+    frame,
+    label,
+    repolish,
+    set_pill,
+    shield_pixmap,
+)
 from network.filters import TRUSTED_DEFAULT
+
+__all__ = ["COLUMNS", "MainWindow", "flag_icon"]
 
 REFRESH_MS = 500
 HISTORY = 120  # 60 s à 500 ms
-
-LEVEL_COLORS = {0: style.GREEN, 1: style.ORANGE, 2: style.RED}
-COLUMNS = [
-    "PAYS",
-    "ADRESSE IP",
-    "PING",
-    "PAQUETS/S",
-    "STATUT",
-    "BADGES",
-    "PSEUDO",
-    "ACTION",
-]
-ACTION_COL = 7
-_FLAGS: dict[str, QIcon] = {}
+SPARK_BARS = 9
+COLUMNS = ["PAYS", "ADRESSE IP", "PING", "PAQUETS/S", "STATUT", "ACTION"]
+# Largeurs relatives mesurées sur la maquette (table de 599 px).
+COL_RATIOS = [113, 147, 53, 118, 89, 79]
+ACTION_COL = 5
+BADGES_ROLE = Qt.ItemDataRole.UserRole + 1
+MAX_ALERTS = 50
+RED_WORDS = ("bloqu", "flood", "débit", "coupé", "erreur", "blocked", "error")
+ORANGE_WORDS = ("récidiv", "vpn", "offender", "ping")
 
 
-def flag_icon(code: str) -> QIcon:
-    """Petit drapeau dessiné localement (bandes) ; code en pastille sinon."""
-    icon = _FLAGS.get(code)
-    if icon is not None:
-        return icon
-    pm = QPixmap(20, 14)
-    pm.fill(QColor("#2a3550"))
-    p = QPainter(pm)
-    spec = countries.STRIPES.get(code)
-    if spec is not None:
-        orient, colors = spec
-        n = len(colors)
-        for i, c in enumerate(colors):
-            if orient == "v":
-                x0, x1 = 20 * i // n, 20 * (i + 1) // n
-                p.fillRect(x0, 0, x1 - x0, 14, QColor(c))
-            else:
-                y0, y1 = 14 * i // n, 14 * (i + 1) // n
-                p.fillRect(0, y0, 20, y1 - y0, QColor(c))
-        if code == "CH":
-            p.fillRect(8, 3, 4, 8, QColor("white"))
-            p.fillRect(6, 5, 8, 4, QColor("white"))
-        elif code == "JP":
-            p.setBrush(QColor("#bc002d"))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(6, 3, 8, 8)
-        elif code == "TR":
-            p.setBrush(QColor("white"))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(4, 3, 8, 8)
-            p.setBrush(QColor("#e30a17"))
-            p.drawEllipse(6, 4, 7, 6)
-    else:
-        p.setPen(QColor(style.MUTED))
-        f = p.font()
-        f.setPixelSize(8)
-        p.setFont(f)
-        p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, code[:2] or "?")
-    p.end()
-    icon = QIcon(pm)
-    _FLAGS[code] = icon
-    return icon
+def alert_color(text: str) -> str:
+    low = text.lower()
+    if any(w in low for w in RED_WORDS):
+        return style.RED
+    if any(w in low for w in ORANGE_WORDS):
+        return style.ORANGE
+    return style.CYAN
 
 
-def card(parent: QWidget | None = None) -> tuple[QFrame, QVBoxLayout]:
-    f = QFrame(parent)
-    f.setObjectName("card")
+def alert_html(text: str) -> str:
+    """Partie avant « : » en gras (comme <strong> de la maquette)."""
+    head, sep, rest = text.partition(" : ")
+    if not sep:
+        head, sep, rest = text.partition(": ")
+    if sep and len(head) <= 40:
+        return f"<b>{html.escape(head)} :</b> {html.escape(rest)}"
+    return html.escape(text)
+
+
+def new_events(prev: list[str], cur: list[str]) -> list[str]:
+    """Événements apparus depuis le dernier instantané (liste glissante)."""
+    for k in range(min(len(prev), len(cur)), 0, -1):
+        if prev[-k:] == cur[:k]:
+            return cur[k:]
+    return cur
+
+
+def panel(
+    title: str, meta: str = ""
+) -> tuple[QFrame, QVBoxLayout, QHBoxLayout, QLabel]:
+    """.panel + .panel-h (titre 13 px, méta 11 px, 10/14 px)."""
+    f = QFrame()
+    f.setObjectName("panel")
     lay = QVBoxLayout(f)
-    lay.setContentsMargins(12, 10, 12, 10)
-    lay.setSpacing(4)
-    return f, lay
+    lay.setContentsMargins(1, 1, 1, 1)
+    lay.setSpacing(0)
+    head = QFrame()
+    head.setObjectName("panelH")
+    head.setFixedHeight(36)  # 185→222 sur la maquette, bordure basse comprise
+    hl = QHBoxLayout(head)
+    hl.setContentsMargins(14, 0, 14, 0)
+    hl.setSpacing(8)
+    hl.addWidget(label(title, "panelTitle"))
+    hl.addStretch(1)
+    m = label(meta, "meta")
+    hl.addWidget(m)
+    lay.addWidget(head)
+    return f, lay, hl, m
 
 
-def label(text: str, name: str = "") -> QLabel:
-    lab = QLabel(text)
-    if name:
-        lab.setObjectName(name)
-    lab.setWordWrap(True)
-    return lab
-
-
-def set_pill(
-    lab: QLabel, on: bool, on_text: str = "ACTIVÉ", off: str = "DÉSACTIVÉ"
-) -> None:
-    lab.setText(on_text if on else off)
-    lab.setObjectName("pillOn" if on else "pillOff")
-    lab.style().unpolish(lab)
-    lab.style().polish(lab)
+def page_header(title: str, hint: str) -> QHBoxLayout:
+    top = QHBoxLayout()
+    top.setContentsMargins(0, 0, 0, 0)
+    h1 = label(title, "h1")
+    h1.setFixedHeight(20)
+    top.addWidget(h1)
+    top.addStretch(1)
+    top.addWidget(label(hint, "hint"))
+    return top
 
 
 class ToggleCard(QFrame):
-    """Carte titre + interrupteur + pastille d'état (vert/rouge)."""
+    """.toggle-card : titre 12/600 + sous-titre 10 px, interrupteur 40×22, état."""
 
     def __init__(
         self,
@@ -145,76 +148,87 @@ class ToggleCard(QFrame):
     ) -> None:
         super().__init__()
         self.setObjectName("card")
+        self.setToolTip(f"Raccourci clavier : {key}")
         self.on_text, self.off_text = on_text, off_text
         self.off_is_good = off_is_good
-        lay = QGridLayout(self)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.addWidget(label(f"{title}  ({key})", "cardTitle"), 0, 0)
-        lay.addWidget(label(sub, "cardSub"), 1, 0)
-        self.switch = QCheckBox()
-        self.switch.setObjectName("switch")
-        self.switch.setFixedSize(38, 22)
-        self.switch.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(83)  # 12 + 30 + 10 + 19 + 12 (maquette)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(10)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        txt = QVBoxLayout()
+        txt.setSpacing(2)
+        t, sb = label(title, "cardTitle"), label(sub, "cardSub")
+        t.setFixedHeight(15)
+        sb.setFixedHeight(13)
+        txt.addWidget(t)
+        txt.addWidget(sb)
+        top.addLayout(txt, 1)
+        self.switch = Switch(neutral_off=off_is_good)
         self.switch.clicked.connect(lambda _c=False: on_click())
-        lay.addWidget(self.switch, 0, 1, 2, 1, Qt.AlignmentFlag.AlignRight)
+        top.addWidget(self.switch, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addLayout(top)
+        bottom = QHBoxLayout()
+        bottom.setSpacing(6)
         self.pill = QLabel()
-        lay.addWidget(self.pill, 2, 0, Qt.AlignmentFlag.AlignLeft)
-        self.extra = QHBoxLayout()
-        lay.addLayout(self.extra, 2, 1)
+        self.pill.setFixedHeight(19)
+        bottom.addWidget(self.pill, 0, Qt.AlignmentFlag.AlignLeft)
+        bottom.addStretch(1)
+        self.extra = bottom
+        lay.addLayout(bottom)
         self.set_state(False)
 
     def set_state(self, on: bool) -> None:
         self.switch.blockSignals(True)
         self.switch.setChecked(on)
         self.switch.blockSignals(False)
-        set_pill(self.pill, on, self.on_text, self.off_text)
-        if (
-            self.off_is_good
-        ):  # relais : « autorisé » (défaut) en vert, « bloqué » en rouge
-            self.pill.setObjectName("pillOff" if on else "pillOn")
-            self.pill.style().unpolish(self.pill)
-            self.pill.style().polish(self.pill)
+        self.switch.update()
+        text = self.on_text if on else self.off_text
+        if self.off_is_good:  # relais : « autorisé » cyan (neutre), « bloqué » rouge
+            set_pill(self.pill, text, "off" if on else "info")
+        else:
+            set_pill(self.pill, text, "on" if on else "off")
 
 
 class StatCard(QFrame):
-    def __init__(self, caption: str, red: bool = False) -> None:
+    """.stat-card : icône 36 px rayon 10, valeur 20/700, libellé 11 px."""
+
+    def __init__(self, icon: str, caption: str, red: bool = False) -> None:
         super().__init__()
         self.setObjectName("card")
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 10)
-        self.value = label("0", "bigRed" if red else "big")
-        lay.addWidget(self.value)
-        lay.addWidget(label(caption, "cardSub"))
+        self.setFixedHeight(64)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(12)
+        ico = label(icon, "statIco")
+        ico.setFixedSize(36, 36)
+        ico.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ico.setProperty("red", red)
+        lay.addWidget(ico)
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        self.value = label("0", "statVal")
+        self.value.setProperty("red", red)
+        col.addWidget(self.value)
+        self.caption = label(caption, "statLbl")
+        col.addWidget(self.caption)
+        lay.addLayout(col, 1)
 
 
-class Sparkline(QWidget):
-    """Trafic entrant des 60 dernières secondes."""
+class PlayersTable(QTableWidget):
+    """Table aux largeurs de colonnes proportionnelles à la maquette."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.values: deque[float] = deque(maxlen=HISTORY)
-        self.setMinimumHeight(48)
-
-    def push(self, v: float) -> None:
-        self.values.append(v)
-        self.update()
-
-    def paintEvent(self, _e: QPaintEvent) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), QColor(style.PANEL))
-        vals = list(self.values)
-        if len(vals) >= 2:
-            top = max(vals) or 1.0
-            w, h = self.width(), self.height() - 4
-            step = w / (HISTORY - 1)
-            x0 = w - step * (len(vals) - 1)
-            pts = [
-                QPointF(x0 + i * step, 2 + h - h * v / top) for i, v in enumerate(vals)
-            ]
-            p.setPen(QPen(QColor(style.CYAN), 1.5))
-            p.drawPolyline(pts)
-        p.end()
+    def resizeEvent(self, e: QResizeEvent) -> None:
+        super().resizeEvent(e)
+        w = self.viewport().width()
+        total = sum(COL_RATIOS)
+        used = 0
+        for i, r in enumerate(COL_RATIOS[:-1]):
+            cw = round(w * r / total)
+            self.setColumnWidth(i, cw)
+            used += cw
+        self.setColumnWidth(len(COL_RATIOS) - 1, max(40, w - used))
 
 
 class LivePage(QWidget):
@@ -223,10 +237,16 @@ class LivePage(QWidget):
         a = win.actions_
         self.win = win
         self._buttons: dict[int, tuple[str, bool, QPushButton]] = {}
+        self._holders: dict[int, QWidget] = {}
+        self.view_rows: list[Row] = []
+        self.history: dict[str, deque[float]] = {}
+        self._events_seen: list[str] = []
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
-        row = QHBoxLayout()
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(12)
+        # .toggles : 5 colonnes égales, écart 10 px.
+        toggles = QGridLayout()
+        toggles.setSpacing(10)
         self.auto = ToggleCard(
             "Bouclier auto", "Détection de flood", a.toggle_auto, "A"
         )
@@ -237,10 +257,12 @@ class LivePage(QWidget):
             "Verrou de session", "Refuse les nouveaux", a.toggle_lock, "V"
         )
         self.rec = ToggleCard(
-            "Enregistrement", "Métadonnées / capture", a.toggle_recording, "E"
+            "Enregistrement", "Capture post-événement", a.toggle_recording, "E"
         )
         self.kick = QPushButton("Capturer (K)")
-        self.kick.setToolTip("Boîte noire : capture des secondes avant/après")
+        self.kick.setObjectName("ghost")
+        self.kick.setToolTip("Boîte noire : capture des secondes avant/après un kick")
+        self.kick.setStyleSheet("padding: 1px 8px; font-size: 10px;")
         self.kick.clicked.connect(lambda _c=False: a.kick_capture())
         self.rec.extra.addWidget(self.kick)
         self.relay = ToggleCard(
@@ -252,37 +274,29 @@ class LivePage(QWidget):
             off_text="AUTORISÉ",
             off_is_good=True,
         )
-        for c in (self.auto, self.total, self.lock, self.rec, self.relay):
-            row.addWidget(c)
-        root.addLayout(row)
-        row2 = QHBoxLayout()
-        self.panic = ToggleCard(
-            "Panique", "Seuls les amis passent", a.toggle_panic, "X"
-        )
-        self.sound = ToggleCard("Son récidiviste", "Alerte sonore", a.toggle_sound, "S")
-        self.cut = ToggleCard(
-            "Coupure immédiate", "Récidiviste coupé au 1er paquet", a.toggle_cut, "C"
-        )
-        for c in (self.panic, self.sound, self.cut):
-            row2.addWidget(c)
-        root.addLayout(row2)
-        stats = QHBoxLayout()
-        self.players = StatCard("Joueurs en session")
-        self.blocked = StatCard("Bloqués", red=True)
-        self.pps = StatCard("Paquets/s")
-        self.state = StatCard("Protection")
-        for sc in (self.players, self.blocked, self.pps, self.state):
-            stats.addWidget(sc)
+        for i, c in enumerate((self.auto, self.total, self.lock, self.rec, self.relay)):
+            toggles.addWidget(c, 0, i)
+            toggles.setColumnStretch(i, 1)
+        root.addLayout(toggles)
+        # .stats : 4 colonnes égales.
+        stats = QGridLayout()
+        stats.setSpacing(10)
+        self.players = StatCard("👥", "Joueurs en session")
+        self.blocked = StatCard("⊘", "Bloqués", red=True)
+        self.pps = StatCard("⟳", "Paquets/s")
+        self.state = StatCard("◈", "Protection")
+        for i, sc in enumerate((self.players, self.blocked, self.pps, self.state)):
+            stats.addWidget(sc, 0, i)
+            stats.setColumnStretch(i, 1)
         root.addLayout(stats)
+        # .content-row : table (1fr) + alertes 280 px, écart 12 px.
         body = QHBoxLayout()
-        left = QVBoxLayout()
-        head = QHBoxLayout()
-        head.addWidget(label("Joueurs en session", "cardTitle"))
-        head.addStretch(1)
+        body.setSpacing(12)
+        tp, tl, head, self.meta = panel(
+            "Joueurs en session", "0 affichés · filtrage réseau uniquement"
+        )
         self.b_block = QPushButton("Bloquer (B)")
-        self.b_block.setObjectName("danger")
         self.b_unblock = QPushButton("Débloquer (D)")
-        self.b_unblock.setObjectName("ok")
         self.b_friend = QPushButton("Ami (F)")
         self.b_pseudo = QPushButton("Pseudo (P)")
         self.b_block.clicked.connect(lambda _c=False: win.block_selected())
@@ -290,64 +304,136 @@ class LivePage(QWidget):
         self.b_friend.clicked.connect(lambda _c=False: win.friend_selected())
         self.b_pseudo.clicked.connect(lambda _c=False: win.pseudo_selected())
         for b in (self.b_block, self.b_unblock, self.b_friend, self.b_pseudo):
+            b.setObjectName("ghost")
+            b.setToolTip("Agit sur la ligne sélectionnée")
+            b.setFixedHeight(20)
+            b.setStyleSheet("padding: 0 8px; font-size: 10px;")
             head.addWidget(b)
-        left.addLayout(head)
-        self.table = QTableWidget(0, len(COLUMNS))
+        self.table = PlayersTable(0, len(COLUMNS))
+        self.table.setObjectName("players")
         self.table.setHorizontalHeaderLabels(COLUMNS)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(ROW_H)
+        self.table.verticalHeader().setMinimumSectionSize(ROW_H)
+        hh = self.table.horizontalHeader()
+        hh.setFixedHeight(HEAD_H)
+        hh.setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        hh.setHighlightSections(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
+        self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.setShowGrid(False)
+        self.table.setWordWrap(False)
+        self.table.setMouseTracking(True)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.setIconSize(QSize(20, 14))
-        left.addWidget(self.table, 1)
-        left.addWidget(
+        self.table.setItemDelegate(PlayersDelegate(self))
+        tl.addWidget(self.table, 1)
+        legend, ll = frame("legend", vertical=False)
+        ll.setContentsMargins(14, 6, 14, 8)
+        ll.setSpacing(8)
+        vpn = label("🔒 VPN", "vpnBadge")
+        ll.addWidget(vpn)
+        ll.addWidget(
             label(
-                "Badges : PAYS = hors pays de confiance · PING = latence élevée · "
-                "DEBIT = débit élevé · VPN = VPN/hébergeur (détection locale) · "
-                "NOUVEAU · AMI · RÉCIDIVISTE",
-                "cardSub",
-            )
+                "= adresse d'un VPN ou d'un hébergeur connu (détection locale) · "
+                "PAYS, PING, DEBIT = hors seuils · NOUVEAU · AMI · RÉCIDIVISTE",
+                "legendText",
+            ),
+            1,
         )
-        # Bloc séparé « Serveurs Rockstar » (maquette) : jamais bloqués.
-        srv, sl = card()
+        tl.addWidget(legend)
+        # .rockstar : serveurs officiels, jamais bloqués.
+        srv, sl = frame("rockstar")
+        sl.setContentsMargins(12, 8, 12, 10)
+        sl.setSpacing(2)
         hl = QHBoxLayout()
-        hl.addWidget(label("SERVEURS ROCKSTAR", "cardSub"))
-        never = QLabel("jamais bloqués")
-        never.setObjectName("pillInfo")
-        hl.addWidget(never)
+        hl.setSpacing(8)
+        hl.addWidget(label("SERVEURS ROCKSTAR", "sectionH"))
+        hl.addWidget(label("jamais bloqués", "tag"))
         hl.addStretch(1)
         sl.addLayout(hl)
+        sl.addSpacing(4)
         self.servers = QTableWidget(0, 3)
+        self.servers.setObjectName("servers")
         self.servers.horizontalHeader().setVisible(False)
         self.servers.verticalHeader().setVisible(False)
+        self.servers.verticalHeader().setDefaultSectionSize(22)
         self.servers.setShowGrid(False)
+        self.servers.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.servers.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.servers.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.servers.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.servers.setMaximumHeight(96)
+        self.servers.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.servers.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sh = self.servers.horizontalHeader()
+        sh.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        sh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        sh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.servers.setColumnWidth(0, 150)
+        self.servers.setColumnWidth(2, 80)
+        self.servers.setFixedHeight(0)
         sl.addWidget(self.servers)
-        self.no_servers = label("Aucun serveur Rockstar vu pour l'instant.", "cardSub")
+        self.no_servers = label(
+            "Aucun serveur Rockstar vu pour l'instant.", "legendText"
+        )
         sl.addWidget(self.no_servers)
-        left.addWidget(srv)
-        body.addLayout(left, 3)
-        right = QVBoxLayout()
-        right.addWidget(label("Alertes", "cardTitle"))
+        tl.addWidget(srv)
+        body.addWidget(tp, 1)
+        ap, al, _ah, _am = panel("Alertes", "Temps réel")
+        ap.setFixedWidth(280)
         self.alerts = QListWidget()
-        self.alerts.setWordWrap(True)
-        self.alerts.setSpacing(3)
-        right.addWidget(self.alerts, 1)
-        self.traffic_lbl = label("TRAFIC ENTRANT (60 S)", "cardSub")
-        right.addWidget(self.traffic_lbl)
-        self.spark = Sparkline()
-        right.addWidget(self.spark)
-        body.addLayout(right, 1)
+        self.alerts.setItemDelegate(AlertDelegate(self.alerts))
+        self.alerts.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.alerts.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.alerts.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.alerts.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.alerts.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.alerts.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.alerts.setUniformItemSizes(False)
+        box = QWidget()
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(10, 8, 10, 8)
+        bl.addWidget(self.alerts)
+        al.addWidget(box, 1)
+        chart, cl = frame("chartBox")
+        cl.setContentsMargins(12, 8, 12, 10)
+        cl.setSpacing(4)
+        ch = QHBoxLayout()
+        ch.addWidget(label("TRAFIC ENTRANT (60 S)", "sectionH"))
+        ch.addStretch(1)
+        self.traffic_lbl = label("0 pkt/s", "chartVal")
+        ch.addWidget(self.traffic_lbl)
+        cl.addLayout(ch)
+        self.spark = Sparkline(HISTORY)
+        cl.addWidget(self.spark)
+        al.addWidget(chart)
+        body.addWidget(ap)
         root.addLayout(body, 1)
+
+    # Données de présentation.
+    @staticmethod
+    def tags(r: Row) -> list[str]:
+        tags = list(r.badges)
+        if r.new:
+            tags.append("NOUVEAU")
+        if r.friend:
+            tags.append("AMI")
+        if r.recidivist:
+            tags.append("RÉCIDIVISTE")
+        return tags
+
+    @staticmethod
+    def status_kind(r: Row) -> str:
+        if r.server:
+            return "server"
+        if r.blocked:
+            return "blocked"
+        return {0: "normal", 1: "unusual"}.get(r.level, "abnormal")
 
     def update_from(self, snap: Snapshot) -> None:
         self.auto.set_state(snap.auto_block)
@@ -355,46 +441,50 @@ class LivePage(QWidget):
         self.lock.set_state(snap.session_lock)
         self.rec.set_state(snap.recording)
         self.relay.set_state(snap.relay_block)
-        self.panic.set_state(snap.panic)
-        self.sound.set_state(snap.offender_sound)
-        self.cut.set_state(snap.offender_drop)
         self.players.value.setText(str(snap.players))
         self.blocked.value.setText(str(snap.blocked))
         self.pps.value.setText(f"{snap.total_pps:.0f}")
         self.state.value.setText("Active" if snap.alive else "Arrêtée")
         self.spark.push(snap.total_pps)
-        self.traffic_lbl.setText(f"TRAFIC ENTRANT (60 S) — {snap.total_pps:.0f} pkt/s")
+        self.traffic_lbl.setText(f"{snap.total_pps:.0f} pkt/s")
         self._fill_table(snap)
-        events = list(reversed(snap.events))
-        if [self.alerts.item(i).text() for i in range(self.alerts.count())] != events:
-            self.alerts.clear()
-            self.alerts.addItems(events)
+        self._fill_alerts(list(snap.events))
+
+    def _fill_alerts(self, events: list[str]) -> None:
+        fresh = new_events(self._events_seen, events)
+        self._events_seen = events
+        if not fresh:
+            return
+        now = time.strftime("%H:%M:%S")
+        for text in fresh:
+            item = QListWidgetItem(text)
+            item.setData(
+                Qt.ItemDataRole.UserRole, (now, alert_color(text), alert_html(text))
+            )
+            self.alerts.insertItem(0, item)
+        while self.alerts.count() > MAX_ALERTS:
+            self.alerts.takeItem(self.alerts.count() - 1)
 
     def _fill_table(self, snap: Snapshot) -> None:
         t = self.table
         selected = self.selected_ip()
         players = [r for r in snap.rows if not r.server]
+        for r in snap.rows:
+            h = self.history.setdefault(r.ip, deque(maxlen=SPARK_BARS))
+            h.append(r.pps)
+        self.view_rows = players
+        self.meta.setText(f"{len(players)} affichés · filtrage réseau uniquement")
         t.setUpdatesEnabled(False)
         t.setRowCount(len(players))
         for i, r in enumerate(players):
-            tags = list(r.badges)
-            if r.new:
-                tags.append("NOUVEAU")
-            if r.friend:
-                tags.append("AMI")
-            if r.recidivist:
-                tags.append("RÉCIDIVISTE")
             ping = "—" if r.ping_ms is None else f"{r.ping_ms:.0f} ms"
             cells = [
                 countries.name(r.country) if r.country != "—" else "Inconnu",
-                r.label,
+                r.ip,
                 ping,
                 f"{r.pps:.0f}",
                 r.status,
-                " ".join(tags),
-                r.pseudo,
             ]
-            color = style.RED if r.blocked else LEVEL_COLORS.get(r.level, style.TEXT)
             for j, text in enumerate(cells):
                 item = t.item(i, j)
                 if item is None:
@@ -404,22 +494,22 @@ class LivePage(QWidget):
                 if j == 0:
                     item.setData(Qt.ItemDataRole.UserRole, r.ip)
                     item.setIcon(flag_icon(r.country))
-                if j == 4:
-                    item.setForeground(QColor(color))
-                elif j == 5:
-                    item.setForeground(
-                        QColor(style.VIOLET if "VPN" in tags else style.ORANGE)
-                    )
-                else:
-                    item.setForeground(QColor(style.TEXT))
+                    item.setToolTip(text)
+                elif j == 1:
+                    tags = self.tags(r)
+                    item.setData(BADGES_ROLE, " ".join(tags))
+                    item.setToolTip(" ".join([r.pseudo, *tags]).strip())
             self._row_button(i, r.ip, r.blocked)
             if r.ip == selected:
                 t.selectRow(i)
         for i in [k for k in self._buttons if k >= len(players)]:
             del self._buttons[i]
+            self._holders.pop(i, None)
         t.setUpdatesEnabled(True)
+        t.viewport().update()
         servers = [r for r in snap.rows if r.server]
         self.servers.setRowCount(len(servers))
+        self.servers.setFixedHeight(22 * min(len(servers), 3))
         self.no_servers.setVisible(not servers)
         for i, r in enumerate(servers):
             for j, text in enumerate((r.ip, r.status, f"{r.pps:.0f} pkt/s")):
@@ -427,8 +517,13 @@ class LivePage(QWidget):
                 if item is None:
                     item = QTableWidgetItem()
                     self.servers.setItem(i, j, item)
+                    item.setFont(font(11, mono=j == 0))
+                    item.setForeground(Qt.GlobalColor.gray)
+                    if j == 2:
+                        item.setTextAlignment(
+                            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                        )
                 item.setText(text)
-                item.setForeground(QColor(style.CYAN if j == 0 else style.MUTED))
 
     def _row_button(self, row: int, ip: str, blocked: bool) -> None:
         """Bouton Bloquer/Débloquer de la ligne (recréé seulement si la ligne change)."""
@@ -438,11 +533,22 @@ class LivePage(QWidget):
         b = QPushButton("Débloquer" if blocked else "Bloquer")
         b.setObjectName("ok" if blocked else "danger")
         b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setFixedHeight(22)
+        b.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         if blocked:
             b.clicked.connect(lambda _c=False, x=ip: self.win.unblock_ip(x))
         else:
             b.clicked.connect(lambda _c=False, x=ip: self.win.block_ip(x))
-        self.table.setCellWidget(row, ACTION_COL, b)
+        holder = QWidget()
+        hl = QHBoxLayout(holder)
+        hl.setContentsMargins(10, 0, 4, 0)
+        hl.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
+        hl.addStretch(1)
+        old = self._holders.pop(row, None)
+        if old is not None:
+            old.hide()
+        self.table.setCellWidget(row, ACTION_COL, holder)
+        self._holders[row] = holder
         self._buttons[row] = (ip, blocked, b)
 
     def row_button(self, ip: str) -> QPushButton | None:
@@ -462,25 +568,45 @@ class LivePage(QWidget):
         return ip if isinstance(ip, str) else None
 
 
+def plain_table(headers: list[str]) -> QTableWidget:
+    t = QTableWidget(0, len(headers))
+    t.setObjectName("plain")
+    t.setHorizontalHeaderLabels(headers)
+    t.verticalHeader().setVisible(False)
+    t.verticalHeader().setDefaultSectionSize(ROW_H)
+    hh = t.horizontalHeader()
+    hh.setFixedHeight(HEAD_H)
+    hh.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    hh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    hh.setHighlightSections(False)
+    t.setShowGrid(False)
+    t.setWordWrap(False)
+    t.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    t.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+    t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    return t
+
+
 class BlockedPage(QWidget):
     def __init__(self, win: MainWindow) -> None:
         super().__init__()
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.addWidget(label("Joueurs bloqués", "big"))
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["ADRESSE IP", "STATUT"])
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
+        lay.addLayout(
+            page_header(
+                "Joueurs bloqués", "Débloquer : sélection puis bouton ou touche D"
+            )
         )
-        lay.addWidget(self.table, 1)
+        p, pl, head, self.meta = panel("Adresses bloquées", "")
         self.unblock = QPushButton("Débloquer la sélection (D)")
         self.unblock.setObjectName("ok")
         self.unblock.clicked.connect(lambda _c=False: self._unblock(win))
-        lay.addWidget(self.unblock, 0, Qt.AlignmentFlag.AlignLeft)
+        head.addWidget(self.unblock)
+        self.table = plain_table(["ADRESSE IP", "STATUT"])
+        pl.addWidget(self.table, 1)
+        lay.addWidget(p, 1)
 
     def _unblock(self, win: MainWindow) -> None:
         rows = self.table.selectionModel().selectedRows()
@@ -491,6 +617,7 @@ class BlockedPage(QWidget):
                 win.refresh()
 
     def update_from(self, snap: Snapshot) -> None:
+        self.meta.setText(f"{len(snap.blocked_list)} bloquée(s)")
         if self.table.rowCount() == len(snap.blocked_list) and all(
             (it := self.table.item(i, 0)) is not None and it.text() == ip
             for i, (ip, _s) in enumerate(snap.blocked_list)
@@ -502,7 +629,9 @@ class BlockedPage(QWidget):
             return
         self.table.setRowCount(len(snap.blocked_list))
         for i, (ip, st) in enumerate(snap.blocked_list):
-            self.table.setItem(i, 0, QTableWidgetItem(ip))
+            it = QTableWidgetItem(ip)
+            it.setFont(font(11.5, mono=True))
+            self.table.setItem(i, 0, it)
             self.table.setItem(i, 1, QTableWidgetItem(st))
 
 
@@ -511,11 +640,16 @@ class FriendsPage(QWidget):
         super().__init__()
         self.win = win
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.addWidget(label("Amis (toujours autorisés, même en panique)", "big"))
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
+        lay.addLayout(page_header("Amis", "Toujours autorisés, même en mode panique"))
+        p, pl, _head, self.meta = panel("Liste des amis", "")
         self.list = QListWidget()
-        lay.addWidget(self.list, 1)
-        form = QHBoxLayout()
+        self.list.setObjectName("friendsList")
+        pl.addWidget(self.list, 1)
+        form_box, form = frame("legend", vertical=False)
+        form.setContentsMargins(14, 8, 14, 10)
+        form.setSpacing(8)
         self.ip = QLineEdit()
         self.ip.setPlaceholderText("Adresse IP")
         self.nick = QLineEdit()
@@ -528,9 +662,10 @@ class FriendsPage(QWidget):
         self.remove.clicked.connect(lambda _c=False: self._remove())
         for w in (self.ip, self.nick, self.add, self.remove):
             form.addWidget(w)
-        lay.addLayout(form)
-        self.message = label("", "cardSub")
-        lay.addWidget(self.message)
+        self.message = label("", "legendText")
+        form.addWidget(self.message, 1)
+        pl.addWidget(form_box)
+        lay.addWidget(p, 1)
 
     def _add(self) -> None:
         ok = self.win.actions_.add_friend_ip(self.ip.text(), self.nick.text())
@@ -549,6 +684,7 @@ class FriendsPage(QWidget):
         self.win.refresh()
 
     def update_from(self, snap: Snapshot) -> None:
+        self.meta.setText(f"{len(snap.friends)} ami(s)")
         texts = [f"{nick}  —  {ip}" for ip, nick in snap.friends]
         if [self.list.item(i).text() for i in range(self.list.count())] == texts:
             return
@@ -560,18 +696,23 @@ class FriendsPage(QWidget):
 
 
 class SliderRow(QWidget):
+    """.field : libellé 12 px + valeur cyan, curseur 6 px dégradé."""
+
     def __init__(
         self, title: str, lo: int, hi: int, unit: str, on_change: Callable[[], None]
     ) -> None:
         super().__init__()
         self.unit = unit
+        # libellé 15 px + 6 px + curseur 6 px ; la poignée 14 px déborde de 4 px.
+        self.setFixedHeight(31)
         lay = QGridLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(QLabel(title), 0, 0)
-        self.value = QLabel()
-        self.value.setStyleSheet(f"color: {style.CYAN}; font-weight: 600;")
+        lay.setVerticalSpacing(2)
+        lay.addWidget(label(title, "fieldLabel"), 0, 0)
+        self.value = label("", "fieldVal")
         lay.addWidget(self.value, 0, 1, Qt.AlignmentFlag.AlignRight)
         self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setFixedHeight(14)
         self.slider.setRange(lo, hi)
         self.slider.valueChanged.connect(self._show)
         self.slider.sliderReleased.connect(on_change)
@@ -581,7 +722,7 @@ class SliderRow(QWidget):
         lay.addWidget(self.slider, 1, 0, 1, 2)
 
     def _show(self, v: int) -> None:
-        self.value.setText(f"{v} {self.unit}")
+        self.value.setText(f"{v} {self.unit}".strip())
 
     def set(self, v: float) -> None:
         self.slider.blockSignals(True)
@@ -593,157 +734,197 @@ class SliderRow(QWidget):
         return int(self.slider.value())
 
 
+def set_card(icon: str, title: str, desc: str) -> tuple[QFrame, QVBoxLayout]:
+    """.set-card : h3 12.5/650 + icône cyan, description 10.5 px, champs."""
+    f = QFrame()
+    f.setObjectName("card")
+    lay = QVBoxLayout(f)
+    lay.setContentsMargins(14, 12, 14, 12)
+    lay.setSpacing(0)
+    h = QHBoxLayout()
+    h.setSpacing(8)
+    ico = label(icon, "h3Ico")
+    ttl = label(title, "h3")
+    for w in (ico, ttl):
+        w.setFixedHeight(15)
+    h.addWidget(ico)
+    h.addWidget(ttl, 1)
+    lay.addLayout(h)
+    lay.addSpacing(3)
+    lay.addWidget(label(desc, "setDesc", wrap=True))
+    lay.addSpacing(10)
+    return f, lay
+
+
+def segmented(
+    names: list[str], on_click: Callable[[int], None]
+) -> tuple[QFrame, list[QPushButton]]:
+    f = QFrame()
+    f.setObjectName("segmented")
+    lay = QHBoxLayout(f)
+    lay.setContentsMargins(3, 3, 3, 3)
+    lay.setSpacing(0)
+    buttons = []
+    for i, n in enumerate(names):
+        b = QPushButton(n)
+        b.setObjectName("seg")
+        b.setFixedHeight(29)
+        b.setCheckable(True)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.clicked.connect(lambda _c=False, k=i: on_click(k))
+        lay.addWidget(b, 1)
+        buttons.append(b)
+    return f, buttons
+
+
 class SettingsPage(QWidget):
-    """Toutes les valeurs de data.json ; appliquées immédiatement."""
+    """Toutes les valeurs de data.json ; appliquées immédiatement (grille 3×3)."""
 
     def __init__(self, win: MainWindow) -> None:
         super().__init__()
         self.win = win
         self._loading = False
+        a = win.actions_
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        top = QHBoxLayout()
-        top.addWidget(label("Réglages", "big"))
-        top.addStretch(1)
-        top.addWidget(
-            label(
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(12)
+        root.addLayout(
+            page_header(
+                "Réglages",
                 "Les modifications s'appliquent immédiatement au filtre réseau",
-                "cardSub",
             )
         )
-        root.addLayout(top)
         grid = QGridLayout()
         grid.setSpacing(10)
+        for c in range(3):
+            grid.setColumnStretch(c, 1)
         ch = self._changed
-        # Bouclier auto
-        f, lay = card()
-        lay.addWidget(label("Bouclier auto", "cardTitle"))
-        lay.addWidget(
-            label(
-                "Bloque les sources dont le débit dépasse le seuil "
-                "pendant le délai configuré.",
-                "cardSub",
-            )
+        f, lay = set_card(
+            "🛡️",
+            "Bouclier auto",
+            "Bloque automatiquement les sources dont le débit de paquets dépasse "
+            "le seuil pendant le délai configuré.",
         )
         self.shield_seconds = SliderRow("Délai de réaction", 1, 60, "s", ch)
         self.shield_pps = SliderRow("Seuil (paquets/s)", 20, 1000, "", ch)
         lay.addWidget(self.shield_seconds)
+        lay.addSpacing(5)  # .field margin-bottom 9 px moins le débord de la poignée
         lay.addWidget(self.shield_pps)
+        lay.addStretch(1)
         grid.addWidget(f, 0, 0)
-        # Filtre pays
-        f, lay = card()
-        lay.addWidget(label("Filtre pays", "cardTitle"))
-        lay.addWidget(label("Pays de confiance : jamais signalés « PAYS ».", "cardSub"))
+        f, lay = set_card(
+            "🌍",
+            "Filtre pays",
+            "Pays exclus du filtrage (jamais bloqués automatiquement).",
+        )
         self.trusted: list[str] = []
         self.chips_box = QWidget()
-        self.chips = QGridLayout(self.chips_box)
-        self.chips.setContentsMargins(0, 0, 0, 0)
-        self.chips.setSpacing(6)
+        self.chips = FlowLayout(self.chips_box, gap=6)
         self.chip_buttons: dict[str, QPushButton] = {}
-        lay.addWidget(self.chips_box)
-        r = QHBoxLayout()
         self.country_in = QLineEdit()
-        self.country_in.setPlaceholderText("Code pays (ex. DE)")
+        self.country_in.setPlaceholderText("Code (DE)")
         self.country_in.setMaxLength(2)
-        self.country_in.setMaximumWidth(150)
+        self.country_in.setFixedSize(76, 26)
         self.country_in.returnPressed.connect(self._add_country)
         self.country_add = QPushButton("+ Ajouter")
         self.country_add.setObjectName("chipAdd")
+        self.country_add.setCursor(Qt.CursorShape.PointingHandCursor)
         self.country_add.clicked.connect(lambda _c=False: self._add_country())
-        r.addWidget(self.country_in)
-        r.addWidget(self.country_add)
-        r.addStretch(1)
-        lay.addLayout(r)
+        self.chips.addWidget(self.country_in)
+        self.chips.addWidget(self.country_add)
+        lay.addWidget(self.chips_box)
+        lay.addStretch(1)
         grid.addWidget(f, 0, 1)
-        # Ping
-        f, lay = card()
-        lay.addWidget(label("Filtre ping", "cardTitle"))
-        lay.addWidget(
-            label(
-                "Signale les joueurs au-delà du seuil de latence (estimée).", "cardSub"
-            )
+        f, lay = set_card(
+            "📡",
+            "Filtre ping",
+            "Signale ou limite les joueurs au-delà du seuil de latence.",
         )
         self.ping = SliderRow("Ping maximum", 1, 1000, "ms", ch)
         lay.addWidget(self.ping)
+        lay.addStretch(1)
         grid.addWidget(f, 0, 2)
-        # Débit
-        f, lay = card()
-        lay.addWidget(label("Limite de débit par joueur", "cardTitle"))
-        lay.addWidget(label("Paquets/s autorisés par adresse avant alerte.", "cardSub"))
+        f, lay = set_card(
+            "〰",
+            "Limite de débit par joueur",
+            "Plafond de paquets/s autorisé pour chaque adresse avant alerte.",
+        )
         self.rate = SliderRow("Limite", 1, 2000, "pkt/s", ch)
         lay.addWidget(self.rate)
+        lay.addStretch(1)
         grid.addWidget(f, 1, 0)
-        # Relais
-        f, lay = card()
-        lay.addWidget(label("Relais Rockstar (L)", "cardTitle"))
-        lay.addWidget(
-            label("Services officiels Rockstar — recommandé : Autoriser.", "cardSub")
+        f, lay = set_card(
+            "☁",
+            "Relais Rockstar",
+            "Services officiels Rockstar (auth, matchmaking) — recommandés en "
+            "Autoriser.",
         )
-        seg = QHBoxLayout()
-        self.relay_allow = QPushButton("Autoriser")
-        self.relay_block = QPushButton("Bloquer")
-        for b in (self.relay_allow, self.relay_block):
-            b.setObjectName("seg")
-            b.setCheckable(True)
-            seg.addWidget(b)
-        self.relay_allow.clicked.connect(lambda _c=False: self._relay(False))
-        self.relay_block.clicked.connect(lambda _c=False: self._relay(True))
-        lay.addLayout(seg)
+        seg, (self.relay_allow, self.relay_block) = segmented(
+            ["Autoriser", "Bloquer"], lambda k: self._relay(k == 1)
+        )
+        lay.addWidget(seg)
+        lay.addStretch(1)
         grid.addWidget(f, 1, 1)
-        # Récidivistes
-        f, lay = card()
-        lay.addWidget(label("Récidivistes", "cardTitle"))
-        lay.addWidget(label("Adresses déjà bloquées qui réapparaissent.", "cardSub"))
-        self.sound = QCheckBox("Alerte sonore (S)")
-        self.cut = QCheckBox("Coupure immédiate (C)")
-        for c in (self.sound, self.cut):
-            c.setObjectName("switch")
-            lay.addWidget(c)
-        self.sound.clicked.connect(
-            lambda _c=False: self._act(win.actions_.toggle_sound)
+        f, lay = set_card(
+            "🔔",
+            "Récidivistes",
+            "Adresses déjà bloquées qui réapparaissent dans une session.",
         )
-        self.cut.clicked.connect(lambda _c=False: self._act(win.actions_.toggle_cut))
+        self.sound = SwitchRow(
+            "Alerte sonore (S)",
+            "Notification audio à la détection",
+            lambda: self._act(a.toggle_sound),
+        )
+        self.cut = SwitchRow(
+            "Coupure immédiate (C)",
+            "Dès le 1er paquet reconnu",
+            lambda: self._act(a.toggle_cut),
+        )
+        lay.addWidget(self.sound)
+        lay.addWidget(self.cut)
+        lay.addStretch(1)
         grid.addWidget(f, 1, 2)
-        # Enregistrement
-        f, lay = card()
-        lay.addWidget(label("Enregistrement", "cardTitle"))
-        lay.addWidget(
-            label(
-                "Boîte noire : extrait réseau (métadonnées) autour d'un kick (K).",
-                "cardSub",
-            )
+        f, lay = set_card(
+            "◎",
+            "Enregistrement",
+            "Conserve un extrait réseau (métadonnées) après un kick ou un crash "
+            "suspect.",
         )
         self.recording = SliderRow("Fenêtre post-événement", 1, 300, "s", ch)
         lay.addWidget(self.recording)
+        lay.addStretch(1)
         grid.addWidget(f, 2, 0)
-        # VPN
-        f, lay = card()
-        lay.addWidget(label("VPN", "cardTitle"))
-        lay.addWidget(
-            label("Détection locale des VPN et hébergeurs connus.", "cardSub")
+        f, lay = set_card(
+            "🔒",
+            "VPN",
+            "Détection locale des adresses appartenant à des VPN ou hébergeurs connus.",
         )
-        self.vpn_flag = QCheckBox("Signaler les VPN")
-        self.vpn_block = QCheckBox("Bloquer automatiquement les VPN")
-        for c in (self.vpn_flag, self.vpn_block):
-            c.setObjectName("switch")
-            c.clicked.connect(lambda _c=False: self._changed())
-            lay.addWidget(c)
+        self.vpn_flag = Switch()
+        self.vpn_block = Switch()
+        self.vpn_flag_row = SwitchRow(
+            "Signaler les VPN",
+            "Affiche un badge violet sur les IP concernées",
+            badge=True,
+            switch=self.vpn_flag,
+        )
+        self.vpn_block_row = SwitchRow(
+            "Bloquer automatiquement les VPN",
+            "Coupe le trafic dès qu'un VPN est reconnu",
+            badge=True,
+            switch=self.vpn_block,
+        )
+        for sw in (self.vpn_flag, self.vpn_block):
+            sw.clicked.connect(lambda _c=False: self._changed())
+        lay.addWidget(self.vpn_flag_row)
+        lay.addWidget(self.vpn_block_row)
+        lay.addStretch(1)
         grid.addWidget(f, 2, 1)
-        # Langue
-        f, lay = card()
-        lay.addWidget(label("Langue", "cardTitle"))
-        lay.addWidget(
-            label("Langue des messages (l'interface est en français).", "cardSub")
+        f, lay = set_card("🌐", "Langue", "Langue des messages et des alertes.")
+        seg, (self.lang_fr, self.lang_en) = segmented(
+            ["Français", "English"], lambda k: self._lang("en" if k else "fr")
         )
-        seg = QHBoxLayout()
-        self.lang_fr = QPushButton("Français")
-        self.lang_en = QPushButton("English")
-        for b, code in ((self.lang_fr, "fr"), (self.lang_en, "en")):
-            b.setObjectName("seg")
-            b.setCheckable(True)
-            b.clicked.connect(lambda _c=False, c=code: self._lang(c))
-            seg.addWidget(b)
-        lay.addLayout(seg)
+        lay.addWidget(seg)
+        lay.addStretch(1)
         grid.addWidget(f, 2, 2)
         root.addLayout(grid)
         root.addStretch(1)
@@ -757,8 +938,8 @@ class SettingsPage(QWidget):
             self.ping.set(s.ping_max_ms)
             self.rate.set(s.rate_limit_pps)
             self.recording.set(s.recording_seconds)
-            self.vpn_flag.setChecked(s.vpn_flag)
-            self.vpn_block.setChecked(s.vpn_auto_block)
+            self.vpn_flag_row.set_state(s.vpn_flag)
+            self.vpn_block_row.set_state(s.vpn_auto_block)
             self._set_chips(s.trusted_countries)
         finally:
             self._loading = False
@@ -795,13 +976,16 @@ class SettingsPage(QWidget):
             btn = QPushButton(countries.name(code) + ("" if fixed else "  ×"))
             btn.setObjectName("chip")
             btn.setIcon(flag_icon(code))
+            btn.setIconSize(QSize(14, 10))
             if fixed:
                 btn.setToolTip("Pays de confiance par défaut (non retirable)")
             else:
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 btn.setToolTip(f"Retirer {countries.name(code)}")
                 btn.clicked.connect(lambda _c=False, c=code: self._del_country(c))
-            self.chips.addWidget(btn, i // 3, i % 3)
+            self.chips.insertWidget(i, btn)
             self.chip_buttons[code] = btn
+        self.chips_box.updateGeometry()
 
     def _add_country(self) -> None:
         code = self.country_in.text().strip().upper()
@@ -832,13 +1016,8 @@ class SettingsPage(QWidget):
     def update_from(self, snap: Snapshot) -> None:
         self.relay_allow.setChecked(not snap.relay_block)
         self.relay_block.setChecked(snap.relay_block)
-        for c, on in (
-            (self.sound, snap.offender_sound),
-            (self.cut, snap.offender_drop),
-        ):
-            c.blockSignals(True)
-            c.setChecked(on)
-            c.blockSignals(False)
+        self.sound.set_state(snap.offender_sound)
+        self.cut.set_state(snap.offender_drop)
         from util.i18n import get_language
 
         lang = get_language()
@@ -846,10 +1025,49 @@ class SettingsPage(QWidget):
         self.lang_en.setChecked(lang == "en")
 
 
+class NavButton(QPushButton):
+    """.nav-item : 10/12 px, rayon 9, icône 18 px + 10 px + libellé 13/500."""
+
+    def __init__(self, icon: str, text: str) -> None:
+        super().__init__()
+        self.setObjectName("nav")
+        self.setCheckable(True)
+        self.setFixedHeight(39)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAccessibleName(text)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 0, 12, 0)
+        lay.setSpacing(10)
+        self.ico = label(icon, "navIco")
+        self.ico.setFixedWidth(18)
+        self.ico.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.txt = label(text, "navText")
+        for w in (self.ico, self.txt):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            lay.addWidget(w)
+        lay.addStretch(1)
+
+    def text(self) -> str:
+        return self.txt.text()
+
+    def set_active(self, on: bool) -> None:
+        self.setChecked(on)
+        for w in (self.ico, self.txt):
+            w.setProperty("active", on)
+            repolish(w)
+
+
 class MainWindow(QMainWindow):
     """Fenêtre Guardian. ``session`` : BackgroundSession déjà démarrée."""
 
     PAGES = ["Session en direct", "Joueurs bloqués", "Amis", "Réglages"]
+    ICONS = ["◉", "⊘", "♡", "⚙"]
+    FOOT_LEFT = [
+        " : arrêter la protection · Protection active en fond",
+        " : arrêter la protection · Protection active en fond",
+        " : arrêter la protection · Protection active en fond",
+        " : arrêter la protection · Préférences enregistrées localement",
+    ]
 
     def __init__(
         self,
@@ -864,50 +1082,123 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(
             f"Guardian {version} — Pare-feu GTA Online".replace("  ", " ")
         )
-        self.resize(1400, 860)
+        # 1400×860 de la maquette moins sa barre de titre (42 px) : la barre
+        # native de Windows la remplace.
+        self.resize(1400, 818)
         self.setStyleSheet(style.QSS)
         central = QWidget()
-        outer = QVBoxLayout(central)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        main = QHBoxLayout()
+        central.setObjectName("root")
+        main = QHBoxLayout(central)
+        main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
+        main.addWidget(self._sidebar())
+        col = QVBoxLayout()
+        col.setContentsMargins(16, 14, 16, 10)
+        col.setSpacing(12)
+        self.stack = QStackedWidget()
+        for page in (self.live, self.blocked, self.friends, self.settings):
+            self.stack.addWidget(page)
+        col.addWidget(self.stack, 1)
+        col.addWidget(self._footer())
+        main.addLayout(col, 1)
+        self.setCentralWidget(central)
+        self.show_page(0)
+        self._status_since: tuple[str, bool] | None = None
+        self._shortcuts()
+        self.timer = QTimer(self)
+        self.timer.setInterval(REFRESH_MS)
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start()
+        self.refresh()
+
+    def _sidebar(self) -> QFrame:
         side = QFrame()
         side.setObjectName("sidebar")
-        side.setFixedWidth(210)
+        side.setFixedWidth(220)
         sl = QVBoxLayout(side)
-        sl.setContentsMargins(12, 16, 12, 12)
-        sl.addWidget(label("Guardian", "brand"))
-        sl.addWidget(label("PARE-FEU RÉSEAU", "brandSub"))
-        sl.addSpacing(14)
-        self.stack = QStackedWidget()
+        sl.setContentsMargins(12, 16, 12, 14)
+        sl.setSpacing(0)
+        brand_box = QWidget()
+        brand_box.setFixedHeight(54)  # 4 + 32 + 18
+        brand = QHBoxLayout(brand_box)
+        brand.setContentsMargins(8, 4, 8, 18)
+        brand.setSpacing(10)
+        mark = QLabel()
+        mark.setObjectName("brandMark")
+        mark.setFixedSize(32, 32)
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark.setPixmap(shield_pixmap(18))
+        brand.addWidget(mark)
+        names = QVBoxLayout()
+        names.setSpacing(0)
+        names.addWidget(label("Guardian", "brand"))
+        names.addWidget(label("PARE-FEU RÉSEAU", "brandSub"))
+        brand.addLayout(names, 1)
+        sl.addWidget(brand_box)
         self.live = LivePage(self)
         self.blocked = BlockedPage(self)
         self.friends = FriendsPage(self)
         self.settings = SettingsPage(self)
-        self.nav: list[QPushButton] = []
-        for i, (name, page) in enumerate(
-            zip(
-                self.PAGES,
-                (self.live, self.blocked, self.friends, self.settings),
-                strict=True,
-            )
-        ):
-            self.stack.addWidget(page)
-            b = QPushButton(name)
-            b.setObjectName("nav")
-            b.setCheckable(True)
+        self.nav: list[NavButton] = []
+        for i, (name, ico) in enumerate(zip(self.PAGES, self.ICONS, strict=True)):
+            b = NavButton(ico, name)
             b.clicked.connect(lambda _c=False, n=i: self.show_page(n))
             sl.addWidget(b)
+            sl.addSpacing(3)
             self.nav.append(b)
         sl.addStretch(1)
-        self.pilot = label("● Pilote réseau : actif", "footerOk")
-        sl.addWidget(self.pilot)
-        main.addWidget(side)
-        main.addWidget(self.stack, 1)
-        outer.addLayout(main, 1)
-        foot = QHBoxLayout()
-        foot.setContentsMargins(14, 6, 14, 8)
+        foot = QFrame()
+        foot.setObjectName("sideFoot")
+        fl = QVBoxLayout(foot)
+        fl.setContentsMargins(0, 12, 0, 0)
+        fl.setSpacing(10)
+        box = QFrame()
+        box.setObjectName("panicBox")
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(10, 2, 10, 2)
+        self.panic = SwitchRow(
+            "Panique (X)", "Seuls les amis passent", self.actions_.toggle_panic
+        )
+        self.panic.setToolTip("Raccourci clavier : X")
+        bl.addWidget(self.panic)
+        fl.addWidget(box)
+        lang = QFrame()
+        lang.setObjectName("langSwitch")
+        ll = QHBoxLayout(lang)
+        ll.setContentsMargins(3, 3, 3, 3)
+        ll.setSpacing(0)
+        self.lang_buttons: list[QPushButton] = []
+        for code in ("fr", "en"):
+            lb = QPushButton(code.upper())
+            lb.setObjectName("langBtn")
+            lb.setCheckable(True)
+            lb.setCursor(Qt.CursorShape.PointingHandCursor)
+            lb.clicked.connect(lambda _c=False, c=code: self.settings._lang(c))
+            ll.addWidget(lb, 1)
+            self.lang_buttons.append(lb)
+        fl.addWidget(lang)
+        self.driver = QFrame()
+        self.driver.setObjectName("driver")
+        dl = QHBoxLayout(self.driver)
+        dl.setContentsMargins(10, 8, 10, 8)
+        dl.setSpacing(8)
+        self.pilot = label("● Pilote réseau : actif", "driverText")
+        dl.addWidget(self.pilot, 1)
+        fl.addWidget(self.driver)
+        sl.addWidget(foot)
+        return side
+
+    def _footer(self) -> QWidget:
+        box = QWidget()
+        box.setFixedHeight(22)  # .footer : padding-top 6 + ligne 16
+        foot = QHBoxLayout(box)
+        foot.setContentsMargins(4, 6, 4, 0)
+        foot.setSpacing(0)
+        kbd = label("Q", "kbd")
+        foot.addWidget(kbd)
+        self.foot_left = label(self.FOOT_LEFT[0], "footer")
+        foot.addWidget(self.foot_left)
+        foot.addSpacing(14)
         self.status = QLabel("")
         self.status.setObjectName("statusOk")
         foot.addWidget(self.status)
@@ -918,16 +1209,7 @@ class MainWindow(QMainWindow):
                 "footerOk",
             )
         )
-        outer.addLayout(foot)
-        self.setCentralWidget(central)
-        self.show_page(0)
-        self._status_since: tuple[str, bool] | None = None
-        self._shortcuts()
-        self.timer = QTimer(self)
-        self.timer.setInterval(REFRESH_MS)
-        self.timer.timeout.connect(self.refresh)
-        self.timer.start()
-        self.refresh()
+        return box
 
     def _shortcuts(self) -> None:
         a = self.actions_
@@ -952,6 +1234,9 @@ class MainWindow(QMainWindow):
             sc.setContext(Qt.ShortcutContext.WindowShortcut)
             sc.activated.connect(lambda f=fn: self._run(f))
             self._keys.append(sc)
+        quit_ = QShortcut(QKeySequence("Q"), self)  # comme la console : Q arrête
+        quit_.activated.connect(self.close)
+        self._keys.append(quit_)
 
     def _run(self, fn: Callable[[], Any]) -> None:
         fn()
@@ -960,14 +1245,15 @@ class MainWindow(QMainWindow):
     def show_page(self, n: int) -> None:
         self.stack.setCurrentIndex(n)
         for i, b in enumerate(self.nav):
-            b.setChecked(i == n)
+            b.set_active(i == n)
+        if hasattr(self, "foot_left"):
+            self.foot_left.setText(self.FOOT_LEFT[n])
 
     def show_status(self, text: str, ok: bool) -> None:
         """Un seul message (le dernier), vert si actif/ok, rouge sinon."""
         self.status.setText(text)
         self.status.setObjectName("statusOk" if ok else "statusBad")
-        self.status.style().unpolish(self.status)
-        self.status.style().polish(self.status)
+        repolish(self.status)
 
     def refresh(self) -> None:
         try:
@@ -978,6 +1264,7 @@ class MainWindow(QMainWindow):
         self.blocked.update_from(snap)
         self.friends.update_from(snap)
         self.settings.update_from(snap)
+        self.panic.set_state(snap.panic)
         if snap.toggle is not None and snap.toggle != self._status_since:
             self._status_since = snap.toggle
             self.show_status(*snap.toggle)
@@ -987,7 +1274,16 @@ class MainWindow(QMainWindow):
         self.pilot.setText(
             "● Pilote réseau : actif" if snap.alive else "● Pilote réseau : arrêté"
         )
-        self.pilot.setObjectName("footerOk" if snap.alive else "statusBad")
+        for w in (self.pilot, self.driver):
+            if w.property("bad") != (not snap.alive):
+                w.setProperty("bad", not snap.alive)
+                repolish(w)
+        for b, on in zip(
+            self.lang_buttons,
+            (self.settings.lang_fr.isChecked(), self.settings.lang_en.isChecked()),
+            strict=True,
+        ):
+            b.setChecked(on)
 
     # Actions sur la ligne sélectionnée.
     def block_ip(self, ip: str) -> None:
@@ -1004,10 +1300,7 @@ class MainWindow(QMainWindow):
         ip = self.live.selected_ip()
         if ip is None:
             return
-        pseudo = self.ask_text(self, "Bloquer", f"Pseudo pour {ip} (facultatif) :")
-        if pseudo is not None:
-            self.actions_.block(ip, pseudo)
-        self.refresh()
+        self.block_ip(ip)
 
     def unblock_selected(self) -> None:
         ip = self.live.selected_ip()

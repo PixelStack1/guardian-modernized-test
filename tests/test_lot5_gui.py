@@ -64,7 +64,9 @@ def test_table_shows_peers_with_country_ping_pps(win, session):
     assert t.item(row, 0).text() == "France"
     assert t.item(row, 2).text().endswith("ms")
     assert float(t.item(row, 3).text()) > 0
-    assert "NOUVEAU" in t.item(row, 5).text()
+    from gui.window import BADGES_ROLE
+
+    assert "NOUVEAU" in t.item(row, 1).data(BADGES_ROLE)
 
 
 @pytest.mark.parametrize(
@@ -81,13 +83,16 @@ def test_table_shows_peers_with_country_ping_pps(win, session):
 )
 def test_toggle_cards_call_console_keys(qtbot, win, session, keys, card, key, attr):
     before = bool(getattr(session.ctrl, attr))
-    widget = getattr(win.live, card)
+    widget = next(
+        getattr(o, card) for o in (win.live, win.settings, win) if hasattr(o, card)
+    )
     qtbot.mouseClick(widget.switch, Qt.MouseButton.LeftButton)
     assert keys == [key]
     assert bool(getattr(session.ctrl, attr)) is (not before)
     win.refresh()
     assert widget.switch.isChecked() is (not before)
-    assert widget.pill.text() in ("ACTIVÉ", "DÉSACTIVÉ", "BLOQUÉ", "AUTORISÉ")
+    if getattr(widget, "pill", None) is not None:
+        assert widget.pill.text() in ("ACTIVÉ", "DÉSACTIVÉ", "BLOQUÉ", "AUTORISÉ")
 
 
 def test_toggle_persists_like_console(qtbot, win, session):
@@ -304,4 +309,4 @@ def test_country_chips_add_remove(qtbot, win, session):
 def test_relay_allowed_is_green(win):
     win.refresh()
     assert win.live.relay.pill.text() == "AUTORISÉ"
-    assert win.live.relay.pill.objectName() == "pillOn"
+    assert win.live.relay.pill.objectName() == "pillInfo"  # cyan, comme la maquette

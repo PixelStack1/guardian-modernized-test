@@ -30,6 +30,10 @@ def main(out: Path) -> None:
     for ip, n in (("192.81.241.171", 8), ("192.81.241.110", 3)):
         for k in range(n):
             session.monitor.add_packet(ip, 100, session.now - k / n, 6672)
+    for p in (
+        session.monitor.peers.values() if hasattr(session.monitor, "peers") else []
+    ):
+        p.first_seen -= 120  # fin de la période d'apprentissage (capture seulement)
     session.evaluate()
     win = MainWindow(session, "3.7", ask_text=lambda *_a: "Exemple")
     win.timer.stop()
@@ -41,9 +45,16 @@ def main(out: Path) -> None:
     )
     win.actions_.toggle_lock()
     win.actions_.toggle_lock()
-    for _ in range(30):
-        win.live.spark.push(300 + (_ * 37) % 140)
-    win.resize(1400, 860)
+    for k in range(120):  # historique 60 s (sinon courbe/mini-barres vides)
+        win.live.spark.push(380 + (k * 37) % 90 + (160 if 70 < k < 80 else 0))
+    for n, (_ip, h) in enumerate(win.live.history.items()):
+        last = h[-1] if h else 10.0
+        h.clear()
+        for k in range(9):
+            h.append(last * (0.75 + ((k * 7 + n * 3) % 6) / 20))
+    # Zone utile de la maquette : 1400×860 moins bordure (1 px) et barre de titre
+    # (42 px) = 1398×816 ; la barre native de Windows remplace la barre dessinée.
+    win.resize(1398, 816)
     win.show()
     for i, name in enumerate(["session", "bloques", "amis", "reglages"]):
         win.show_page(i)
