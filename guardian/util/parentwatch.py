@@ -227,7 +227,11 @@ def arm_with_pid(
         ci_diag(f"gui gone (wait={r}) -> exit purpose={purpose}")
         if on_exit is not None:
             # nettoyage borné (fermeture handles + désenregistrement) puis sortie dure
-            t = threading.Thread(target=_no_raise(on_exit), daemon=True)
+            def _run() -> None:
+                with contextlib.suppress(Exception):
+                    ci_diag(f"cleanup steps={on_exit()} purpose={purpose}")
+
+            t = threading.Thread(target=_run, daemon=True)
             t.start()
             t.join(cleanup_timeout)
             ci_diag(f"cleanup done={not t.is_alive()} purpose={purpose}")

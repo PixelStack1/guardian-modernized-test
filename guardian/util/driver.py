@@ -167,6 +167,44 @@ def mark_owned(loaded_by_guardian: bool) -> None:
         os.environ[OWNED_ENV] = "1"
 
 
+WINDIVERT_SHUTDOWN_BOTH = 3
+
+
+def cancel_pending_io(handle: Any, dll: Any = None, kernel32: Any = None) -> str:
+    """Débloque une lecture WinDivertRecv en attente avant la fermeture :
+    WinDivertShutdown(h, BOTH) si la DLL l'exporte (WinDivert >= 2.0), sinon
+    CancelIoEx(h, NULL). Fail-open, journalisé, jamais d'exception."""
+    raw = getattr(handle, "_handle", None)
+    if not raw:
+        return "cancel:none"
+    try:
+        if dll is None:
+            from pydivert import windivert_dll as _dll
+
+            dll = _dll
+        fn = getattr(dll, "WinDivertShutdown", None)
+        if fn is not None:
+            fn(raw, WINDIVERT_SHUTDOWN_BOTH)
+            logger.warning("orphan cleanup: WinDivertShutdown(BOTH) ok")
+            return "shutdown"
+    except Exception as e:
+        logger.warning("orphan cleanup: WinDivertShutdown failed: %s", e)
+    try:
+        if kernel32 is None:
+            import ctypes
+            from ctypes import wintypes as wt
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CancelIoEx.argtypes = [wt.HANDLE, ctypes.c_void_p]
+            kernel32.CancelIoEx.restype = wt.BOOL
+        ok = kernel32.CancelIoEx(raw, None)
+        logger.warning("orphan cleanup: CancelIoEx -> %s", ok)
+        return "cancelioex"
+    except Exception as e:
+        logger.warning("orphan cleanup: CancelIoEx failed: %s", e)
+        return "cancel:failed"
+
+
 def orphan_cleanup(windivert: Any = None) -> list[str]:
     """Appelé dans un worker quand la GUI a disparu : fermer NOS handles (fail-open :
     le trafic n'est plus détourné), puis, si Guardian avait chargé le pilote, le
@@ -177,6 +215,10 @@ def orphan_cleanup(windivert: Any = None) -> list[str]:
     steps: list[str] = []
     with _handles_lock:
         handles = list(_open_handles.values())
+    for h in handles:
+        r = cancel_pending_io(h)
+        if r != "cancel:none":
+            steps.append(r)
     for h in handles:
         try:
             h.close()

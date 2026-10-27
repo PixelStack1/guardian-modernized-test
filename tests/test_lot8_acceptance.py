@@ -392,3 +392,37 @@ def test_capture_process_target_is_armed(monkeypatch):
     assert calls == [(77, "live capture"), 3]
     src = (ROOT / "guardian" / "menu" / "livesession.py").read_text("utf-8")
     assert "target=parentwatch.armed_target" in src
+
+
+def test_cancel_pending_io_shutdown_then_cancelioex_fail_open():
+    from util import driver as d
+
+    class H:
+        _handle = 99
+
+    calls = []
+
+    class Dll:
+        def WinDivertShutdown(self, h, how):  # noqa: N802
+            calls.append(("sd", h, how))
+
+    class K32:
+        def CancelIoEx(self, h, ov):  # noqa: N802
+            calls.append(("cx", h, ov))
+            return 1
+
+    assert d.cancel_pending_io(H(), dll=Dll(), kernel32=K32()) == "shutdown"
+    assert calls == [("sd", 99, 3)]
+    calls.clear()
+    assert d.cancel_pending_io(H(), dll=object(), kernel32=K32()) == "cancelioex"
+    assert calls == [("cx", 99, None)]
+
+    class Bad:
+        def WinDivertShutdown(self, h, how):  # noqa: N802
+            raise OSError("x")
+
+        def __getattr__(self, n):
+            raise OSError("y")
+
+    assert d.cancel_pending_io(H(), dll=Bad(), kernel32=Bad()) == "cancel:failed"
+    assert d.cancel_pending_io(object()) == "cancel:none"
