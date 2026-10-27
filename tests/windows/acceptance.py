@@ -20,6 +20,7 @@ import ctypes
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -99,6 +100,26 @@ def driver_active(sc_output: str) -> bool:
     if "1060" in sc_output:  # service inexistant = supprimé
         return False
     return any(s in sc_output for s in ("RUNNING", "START_PENDING", "STOP_PENDING"))
+
+
+def service_removed(sc_output: str) -> bool:
+    """Service WinDivert entièrement supprimé : OpenService échoue avec 1060."""
+    return "1060" in sc_output
+
+
+def service_state(sc_output: str) -> str:
+    """État lisible depuis ``sc query`` : ABSENT(1060), RUNNING, STOPPED… ou brut."""
+    if service_removed(sc_output):
+        return "ABSENT(1060)"
+    m = re.search(r"STATE\s*:\s*\d+\s+(\w+)", sc_output)
+    return m.group(1) if m else " ".join(sc_output.split())[:80] or "UNKNOWN"
+
+
+def dialog_check_detail(found: list[tuple[int, int, str]]) -> str:
+    """Détail du contrôle « aucune boîte d'erreur du chargeur »."""
+    if not found:
+        return "none"
+    return "; ".join(f"pid={pid} hwnd={hwnd} {title!r}" for pid, hwnd, title in found)
 
 
 def hotkey_lparam(mods: int, vk: int) -> int:
@@ -928,7 +949,9 @@ def scenario_kill(
             detail += "; left: " + same_exe_processes(exe, cmdline=True)
             detail += "; ci-spawn.log: " + " | ".join(spawn_log()[-30:])
         if target == "child":
-            dump_dialogs(exe, out, win, "kill_child")
+            state = service_state(sc_query())
+            rep.metrics["kill_child.service_state"] = state
+            print(f"[INFO] kill-child: WinDivert service state = {state}", flush=True)
         name = f"taskkill /F {target} PID: process tree exited"
         if target == "child":  # docs/ci-acceptance.md, « Réserve connue »
             rep.reserve(name, ok, detail, "capture helper lingers, no driver access")
@@ -936,6 +959,26 @@ def scenario_kill(
             rep.check(name, ok, detail)
         check_driver_gone(rep, f"taskkill-{target}")
         if target == "child":
+            # Strict : service entièrement supprimé (OpenService -> 1060), pas STOPPED.
+            gone, ms = wait_until(
+                lambda: service_removed(sc_query()), threshold("DRIVER_GONE_MS"), 0.1
+            )
+            state = service_state(sc_query())
+            rep.metrics["kill_child.service_removed_ms"] = round(ms)
+            rep.metrics["kill_child.service_state_after"] = state
+            rep.check(
+                "taskkill-child: WinDivert service removed (OpenService 1060)",
+                gone,
+                f"{ms:.0f} ms; state={state}",
+            )
+            # Strict : aucune boîte « Unhandled exception in script » / « Warning ».
+            found = dump_dialogs(exe, out, win, "kill_child")
+            rep.metrics["kill_child.error_dialogs"] = dialog_check_detail(found)
+            rep.check(
+                "taskkill-child: no 'Unhandled exception'/'Warning' dialog",
+                not found,
+                dialog_check_detail(found),
+            )
             # Relance immédiate, orphelin de capture éventuellement encore vivant.
             relaunch_after_kill(exe, out, rep, win)
     finally:
@@ -964,7 +1007,12 @@ def relaunch_after_kill(
                 f"ci-spawn.log: {' | '.join(spawn_log()[-12:])}",
                 flush=True,
             )
-            dump_dialogs(exe, out, win, "relaunch")
+            found = dump_dialogs(exe, out, win, "relaunch")
+            rep.check(
+                "relaunch: no 'Unhandled exception'/'Warning' dialog",
+                not found,
+                dialog_check_detail(found),
+            )
             return
         sc = sc_query()
         rep.check(
@@ -982,6 +1030,12 @@ def relaunch_after_kill(
             and len(hk.get("registered", [])) == 5
             and not hk.get("failed"),
             json.dumps(hk),
+        )
+        found = dump_dialogs(exe, out, win, "relaunch")
+        rep.check(
+            "relaunch: no 'Unhandled exception'/'Warning' dialog",
+            not found,
+            dialog_check_detail(found),
         )
         sniff_check(rep)  # handle fermé AVANT WM_CLOSE : n'empêche pas le retrait
         win.post(run.hwnd, run.child, WM_CLOSE)

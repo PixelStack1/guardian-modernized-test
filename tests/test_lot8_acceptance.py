@@ -693,3 +693,42 @@ def test_error_dialogs_detects_loader_boxes_only():
         (2, 20, "Unhandled exception in script"),
     ]
     assert bench.error_dialogs({3: [(30, "Guardian")]}) == []
+
+
+def test_service_state_and_removal_from_sc_output():
+    acc = load_bench()
+
+    gone = "[SC] OpenService FAILED 1060:\n\nThe specified service does not exist"
+    stopped = (
+        "SERVICE_NAME: WinDivert\n        TYPE               : 1  KERNEL_DRIVER\n"
+        "        STATE              : 1  STOPPED\n"
+    )
+    assert acc.service_removed(gone) and acc.service_state(gone) == "ABSENT(1060)"
+    assert not acc.service_removed(stopped)
+    assert acc.service_state(stopped) == "STOPPED"
+    # STOPPED n'est pas « supprimé » : le banc exige 1060
+    assert not acc.driver_active(stopped) and not acc.service_removed(stopped)
+
+
+def test_dialog_check_detail():
+    acc = load_bench()
+
+    assert acc.dialog_check_detail([]) == "none"
+    d = acc.dialog_check_detail([(5, 9, "Warning")])
+    assert "pid=5" in d and "'Warning'" in d
+
+
+def test_kill_child_checks_removal_and_dialogs_strictly():
+    src = (ROOT / "tests" / "windows" / "acceptance.py").read_text("utf-8")
+    body = src[src.index("def scenario_kill") : src.index("def relaunch_after_kill")]
+    assert '"kill_child.service_state"' in body
+    assert '"taskkill-child: WinDivert service removed (OpenService 1060)"' in body
+    assert "\"taskkill-child: no 'Unhandled exception'/'Warning' dialog\"" in body
+    # strict (rep.check), la réserve WARN existante reste inchangée
+    assert body.count("rep.reserve(") == 1
+    relaunch = src[
+        src.index("def relaunch_after_kill") : src.index("def scenario_logoff")
+    ]
+    assert (
+        relaunch.count("\"relaunch: no 'Unhandled exception'/'Warning' dialog\"") == 2
+    )
