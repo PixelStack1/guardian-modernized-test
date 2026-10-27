@@ -5,7 +5,8 @@ d'alerte dans la vue et une ligne dans
 %LOCALAPPDATA%\\Guardian\\journal\\joueurs.log : heure, IP, pays (base GeoIP locale,
 aucun appel réseau) et ping s'il est connu (Guardian ne mesure pas de ping aujourd'hui :
 champ omis). Seuls les paquets ENTRANTS comptent (IP du pair = source), comme le
-compteur de joueurs. Jamais de contenu de paquet. Fichier borné avec rotation.
+compteur de joueurs. Jamais de contenu de paquet. Fichier borné avec rotation :
+1 Mo × (1 actif + 3 anciens) = au plus ~4 Mo sur le disque.
 """
 
 from __future__ import annotations

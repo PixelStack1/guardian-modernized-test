@@ -294,6 +294,29 @@ pas l'hôte** (l'hôte ne change que s'il quitte la session).
   dans `%LOCALAPPDATA%\Guardian\enregistrements\`. Nouveau fichier tous les 1 000 000 lignes /
   100 Mo, arrêt automatique après 5 fichiers.
 
+### Relais Rockstar / Rockstar relay (touche L)
+
+- **autoriser** (par défaut) : comportement inchangé. **bloquer** : jette UNIQUEMENT le jeu relayé
+  par Rockstar, défini par l'heuristique suivante (toutes les conditions) : IP des plages officielles
+  Rockstar/Take-Two + UDP + port de jeu 6672 (61455-61458 exclus) + taille hors heartbeat/matchmaking
+  connus (12, 18, 63, 191, 207, 223, 239, et réponses 45, 125, 205). Authentification, Social Club,
+  HTTPS (TCP) et matchmaking ne sont **jamais** jetés. Heuristique sur métadonnées, pas une certitude.
+- EN: **allow** (default) keeps the current behavior; **block** drops only Rockstar-relayed UDP 6672
+  game traffic (same rules), never auth / Social Club / HTTPS / matchmaking.
+
+### Journal des nouveaux joueurs / New-player journal
+
+Chaque nouvelle IP (hors serveurs Rockstar) : alerte dans la vue + ligne (heure, IP, pays local)
+dans `%LOCALAPPDATA%\Guardian\journal\joueurs.log`. Rotation : 1 Mo par fichier, 1 fichier actif
++ 3 anciens, soit **au plus ~4 Mo sur le disque** (1 Mo × 4 fichiers). Aucun contenu de paquet.
+EN: alert + log line per new IP; bounded to **~4 MB on disk** (1 MB × 4 files).
+
+### Mode rejeu / Replay mode (QA, Linux)
+
+`python -m guardian.replay <enregistrement.csv> [--relais bloquer] [--bouclier] [--lang en] [--journal DOSSIER]`
+rejoue un enregistrement sans WinDivert et affiche les décisions. Les tests tournent aussi sans
+`pydivert` installé (faux module minimal dans `tests/_fakes`, chargé seulement si besoin).
+
 ## Langue / Language
 
 Menu principal → *Langue* : Français (par défaut) ou English. Réglage `"language": "fr"` / `"en"`
