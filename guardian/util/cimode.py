@@ -58,6 +58,19 @@ def dry() -> bool:
     return os.environ.get(DRY_ENV) == "1" and probe_allowed()
 
 
+FAULT_ENV = "GUARDIAN_CI_FAULT"
+# Pannes simulées pour le banc CI (sonde) : jamais honorées hors mode sonde.
+FAULT_DRIVER_ABSENT = "driver_absent"  # pilote retiré avant le contrôle RUNNING -> 5
+FAULT_DRIVER_BLOCKED = "driver_blocked"  # chargement du pilote qui ne rend pas -> 6
+FAULTS = (FAULT_DRIVER_ABSENT, FAULT_DRIVER_BLOCKED)
+
+
+def fault() -> str | None:
+    """Panne demandée par le banc, UNIQUEMENT en mode sonde CI (dry()) ; None sinon."""
+    value = os.environ.get(FAULT_ENV, "")
+    return value if value in FAULTS and dry() else None
+
+
 def probe_effective(
     argv: list[str], env: Mapping[str, str] | None = None
 ) -> Path | None:

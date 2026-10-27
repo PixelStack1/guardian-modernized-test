@@ -218,7 +218,8 @@ def test_main_checks_driver_running_and_bounds_start():
     src = (Path(__file__).resolve().parents[1] / "guardian" / "__main__.py").read_text(
         "utf-8"
     )
-    assert "call_bounded(lambda: driver.start(), DRIVER_START_TIMEOUT_S" in src
+    assert "= lambda: driver.start()" in src
+    assert 'call_bounded(start_driver, DRIVER_START_TIMEOUT_S, "driver start")' in src
     assert src.index("probe_filter(extra_ports_enabled())") < src.index(
         "wait_running(DRIVER_RUNNING_TIMEOUT_S)"
     )
@@ -226,3 +227,38 @@ def test_main_checks_driver_running_and_bounds_start():
     # banc CI : pas de boîte modale (attente infinie), message journalisé
     notify = src[src.index("def notify") : src.index("def ensure_child_streams")]
     assert notify.index("_ci_probe()") < notify.index("MessageBoxW")
+
+
+def test_ci_faults_only_in_ci_probe_mode(monkeypatch):
+    from util import cimode
+
+    monkeypatch.setenv(cimode.FAULT_ENV, cimode.FAULT_DRIVER_ABSENT)
+    for k in ("CI", "GITHUB_ACTIONS", cimode.PROBE_ENV, cimode.DRY_ENV):
+        monkeypatch.delenv(k, raising=False)
+    assert cimode.fault() is None  # hors banc : jamais honorée
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv(cimode.PROBE_ENV, "1")
+    assert cimode.fault() is None  # sonde non active (pas de dry)
+    monkeypatch.setenv(cimode.DRY_ENV, "1")
+    assert cimode.fault() == cimode.FAULT_DRIVER_ABSENT
+    monkeypatch.setenv(cimode.FAULT_ENV, "anything")
+    assert cimode.fault() is None
+
+
+def test_main_ci_faults_wired_to_exit_5_and_6():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "guardian" / "__main__.py").read_text(
+        "utf-8"
+    )
+    blocked = src.index("cimode.FAULT_DRIVER_BLOCKED")
+    assert blocked < src.index("call_bounded(start_driver, DRIVER_START_TIMEOUT_S")
+    import re
+
+    assert re.compile(r"os\._exit\(\s*6\s*\)").search(src, blocked)
+    absent = src.index("cimode.FAULT_DRIVER_ABSENT")
+    assert (
+        absent
+        < src.index("wait_running(DRIVER_RUNNING_TIMEOUT_S)")
+        < src.index("sys.exit(5)")
+    )

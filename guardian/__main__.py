@@ -3,7 +3,9 @@ import ctypes
 import logging
 import os
 import sys
+import threading
 import time
+from collections.abc import Callable
 from multiprocessing import freeze_support
 
 import pydivert
@@ -180,10 +182,15 @@ if __name__ == "__main__":
         from util import parentwatch as _pwatch
 
         sentinel_owned = _pwatch.start_driver_sentinel()
+        start_driver: Callable[[], object] = lambda: driver.start()  # noqa: E731
+        if cimode.fault() == cimode.FAULT_DRIVER_BLOCKED:
+            # Banc CI seulement : chargement qui ne rend jamais la main (-> 6).
+            logger.warning("CI fault %s: driver start never returns", cimode.fault())
+            start_driver = threading.Event().wait
         try:
             # Borné : un service bloqué (ex. marqué pour suppression) ne fige jamais
             # le démarrage en silence.
-            call_bounded(lambda: driver.start(), DRIVER_START_TIMEOUT_S, "driver start")
+            call_bounded(start_driver, DRIVER_START_TIMEOUT_S, "driver start")
         except DriverStartTimeout as e:
             notify(t("main.driver_timeout", e=e))
             logger.error("WinDivert driver start timed out: %s", e)
@@ -223,6 +230,10 @@ if __name__ == "__main__":
             driver.cleanup()
             sys.exit(4)
         # Le pilote doit être RUNNING (attente bornée), sinon échec explicite.
+        if cimode.fault() == cimode.FAULT_DRIVER_ABSENT:
+            # Banc CI seulement : pilote réellement retiré avant le contrôle (-> 5).
+            logger.warning("CI fault %s: driver removed before check", cimode.fault())
+            driver.cleanup()
         running, state = wait_running(DRIVER_RUNNING_TIMEOUT_S)
         if not running:
             notify(
