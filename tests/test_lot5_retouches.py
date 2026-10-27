@@ -418,3 +418,16 @@ def test_files_pages_list_files(qtbot, win, session, tmp_path):
 def test_shortcuts_all_bound(win):
     keys = sorted(sc.key().toString() for sc in win._keys)
     assert keys == sorted("ABCDEFKLPQSTVX")
+
+
+def test_notice_contains_full_lgpl_and_gpl_text():
+    from pathlib import Path
+
+    text = (
+        Path(__file__).resolve().parents[1] / "guardian" / "THIRD_PARTY_NOTICES.txt"
+    ).read_text("utf-8")
+    assert "GNU LESSER GENERAL PUBLIC LICENSE" in text
+    assert "4. Combined Works." in text
+    assert "6. Revised Versions of the GNU Lesser General Public License." in text
+    assert "GNU GENERAL PUBLIC LICENSE" in text
+    assert "END OF TERMS AND CONDITIONS" in text
