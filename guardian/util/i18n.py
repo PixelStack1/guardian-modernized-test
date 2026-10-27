@@ -487,6 +487,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "fr": "Blocage refusé : {ip} est un serveur Rockstar (vous perdriez la session)",
         "en": "Block refused: {ip} is a Rockstar server (you would lose the session)",
     },
+    "gui.shield_help": {
+        "fr": "Coupure si une IP dépasse le seuil en moyenne sur le délai choisi. "
+        "Délai minimal : 3 s. Les inondations (plus de 3× le seuil) sont coupées "
+        "plus vite.",
+        "en": "Cut off when an IP exceeds the threshold on average over the chosen "
+        "delay. Minimum delay: 3 s. Floods (over 3× the threshold) are cut off "
+        "faster.",
+    },
     "live.ev.auto_toggled": {
         "fr": "Bouclier auto : {state}",
         "en": "Auto shield: {state}",

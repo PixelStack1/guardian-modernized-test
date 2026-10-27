@@ -810,6 +810,12 @@ class SettingsPage(QWidget):
         lay.addWidget(self.shield_seconds)
         lay.addSpacing(5)  # .field margin-bottom 9 px moins le débord de la poignée
         lay.addWidget(self.shield_pps)
+        lay.addSpacing(5)
+        from util.i18n import t
+
+        self.shield_help = label(t("gui.shield_help"), "setDesc")
+        self.shield_help.setWordWrap(True)
+        lay.addWidget(self.shield_help)
         lay.addStretch(1)
         grid.addWidget(f, 0, 0)
         f, lay = set_card(
@@ -1018,9 +1024,10 @@ class SettingsPage(QWidget):
         self.relay_block.setChecked(snap.relay_block)
         self.sound.set_state(snap.offender_sound)
         self.cut.set_state(snap.offender_drop)
-        from util.i18n import get_language
+        from util.i18n import get_language, t
 
         lang = get_language()
+        self.shield_help.setText(t("gui.shield_help"))
         self.lang_fr.setChecked(lang == "fr")
         self.lang_en.setChecked(lang == "en")
 

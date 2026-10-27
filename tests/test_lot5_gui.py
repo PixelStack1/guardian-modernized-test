@@ -310,3 +310,18 @@ def test_relay_allowed_is_green(win):
     win.refresh()
     assert win.live.relay.pill.text() == "AUTORISÉ"
     assert win.live.relay.pill.objectName() == "pillInfo"  # cyan, comme la maquette
+
+
+def test_settings_shield_help_text_fr_en(qtbot, win):
+    from util.i18n import get_language, set_language
+
+    before = get_language()
+    try:
+        win.settings.lang_fr.click()
+        fr = win.settings.shield_help.text()
+        assert "moyenne" in fr and "3 s" in fr and "inondations" in fr
+        win.settings.lang_en.click()
+        en = win.settings.shield_help.text()
+        assert "average" in en and "3 s" in en and "Floods" in en
+    finally:
+        set_language(before, persist=False)
