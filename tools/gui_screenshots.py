@@ -35,6 +35,17 @@ def main(out: Path) -> None:
     ):
         p.first_seen -= 120  # fin de la période d'apprentissage (capture seulement)
     session.evaluate()
+    # Exemples (dossier temporaire de la capture uniquement).
+    from network.incident import reports_dir
+
+    rep = reports_dir()
+    rep.mkdir(parents=True, exist_ok=True)
+    for name in ("20261027-142201_176.4.29.17", "20261027-150512_177.54.148.23"):
+        (rep / f"{name}.txt").write_text("Rapport d'incident (exemple)\n" * 40)
+        (rep / f"{name}.json").write_text("{}")
+    rec = Path(os.environ["LOCALAPPDATA"])
+    for name in ("kick-20261027-142205-kick", "kick-20261027-150530-manuel"):
+        (rec / f"{name}.csv").write_text("ts,ip,size\n" + "0,0.0.0.0,0\n" * 300)
     win = MainWindow(session, "3.7", ask_text=lambda *_a: "Exemple")
     win.timer.stop()
     win.actions_.block("176.4.29.17", "Exemple")
@@ -56,8 +67,16 @@ def main(out: Path) -> None:
     # (42 px) = 1398×816 ; la barre native de Windows remplace la barre dessinée.
     win.resize(1398, 816)
     win.show()
-    for i, name in enumerate(["session", "bloques", "amis", "reglages"]):
-        win.show_page(i)
+    pages = [
+        (win.LIVE, "session"),
+        (win.BLOCKED, "bloques"),
+        (win.FRIENDS, "amis"),
+        (win.SETTINGS, "reglages"),
+        (win.REPORTS, "rapports"),
+        (win.RECORDINGS, "enregistrements"),
+    ]
+    for i, (page, name) in enumerate(pages):
+        win.show_page(page)
         win.refresh()
         app.processEvents()
         win.grab().save(str(out / f"{i + 1:02d}-{name}.png"))

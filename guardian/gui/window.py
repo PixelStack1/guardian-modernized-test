@@ -10,6 +10,7 @@ import html
 import time
 from collections import deque
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSize, Qt, QTimer
@@ -37,7 +38,16 @@ from PySide6.QtWidgets import (
 )
 
 from gui import countries, style
-from gui.core import GuiActions, Row, Settings, Snapshot, take_snapshot
+from gui.core import (
+    GuiActions,
+    Row,
+    Settings,
+    Snapshot,
+    list_files,
+    recordings_directory,
+    reports_directory,
+    take_snapshot,
+)
 from gui.widgets import (
     HEAD_H,
     ROW_H,
@@ -635,6 +645,64 @@ class BlockedPage(QWidget):
             self.table.setItem(i, 1, QTableWidgetItem(st))
 
 
+class FilesPage(QWidget):
+    """Liste en lecture seule des fichiers d'un dossier de données."""
+
+    RESCAN_S = 2.0
+
+    def __init__(
+        self,
+        title: str,
+        hint: str,
+        panel_title: str,
+        pattern: str,
+        directory: Callable[[], Path | None],
+        empty: str,
+    ) -> None:
+        super().__init__()
+        self.pattern = pattern
+        self.directory = directory
+        self.empty = empty
+        self._scanned = -1e9
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
+        lay.addLayout(page_header(title, hint))
+        p, pl, _head, self.meta = panel(panel_title, "")
+        self.table = plain_table(["FICHIER", "DATE", "TAILLE"])
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        pl.addWidget(self.table, 1)
+        self.where = label("", "rowSub")
+        self.where.setContentsMargins(14, 6, 14, 8)
+        self.where.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        pl.addWidget(self.where)
+        lay.addWidget(p, 1)
+
+    def update_from(self, snap: Snapshot) -> None:
+        now = time.monotonic()
+        if now - self._scanned < self.RESCAN_S:
+            return
+        self._scanned = now
+        self.rescan()
+
+    def rescan(self) -> None:
+        d = self.directory()
+        files = list_files(d, self.pattern)
+        self.where.setText(f"Dossier : {d}" if d is not None else "")
+        self.meta.setText(f"{len(files)} fichier(s)" if files else self.empty)
+        self.table.setRowCount(len(files))
+        for i, f in enumerate(files):
+            name = QTableWidgetItem(f.name)
+            name.setFont(font(11.5, mono=True))
+            self.table.setItem(i, 0, name)
+            self.table.setItem(i, 1, QTableWidgetItem(f.when()))
+            size = QTableWidgetItem(f"{max(1, round(f.size / 1024))} Ko")
+            size.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.table.setItem(i, 2, size)
+
+
 class FriendsPage(QWidget):
     def __init__(self, win: MainWindow) -> None:
         super().__init__()
@@ -1067,13 +1135,24 @@ class NavButton(QPushButton):
 class MainWindow(QMainWindow):
     """Fenêtre Guardian. ``session`` : BackgroundSession déjà démarrée."""
 
-    PAGES = ["Session en direct", "Joueurs bloqués", "Amis", "Réglages"]
-    ICONS = ["◉", "⊘", "♡", "⚙"]
+    # Ordre et icônes de la maquette ; « Amis » en plus, sous la liste.
+    PAGES = [
+        "Session en direct",
+        "Joueurs bloqués",
+        "Rapports",
+        "Enregistrements",
+        "Réglages",
+        "Amis",
+    ]
+    ICONS = ["◉", "⊘", "☰", "◎", "⚙", "♡"]
+    LIVE, BLOCKED, REPORTS, RECORDINGS, SETTINGS, FRIENDS = range(6)
     FOOT_LEFT = [
         " : arrêter la protection · Protection active en fond",
         " : arrêter la protection · Protection active en fond",
-        " : arrêter la protection · Protection active en fond",
+        " : arrêter la protection · Rapports en lecture seule",
+        " : arrêter la protection · Enregistrements en lecture seule",
         " : arrêter la protection · Préférences enregistrées localement",
+        " : arrêter la protection · Protection active en fond",
     ]
 
     def __init__(
@@ -1103,7 +1182,14 @@ class MainWindow(QMainWindow):
         col.setContentsMargins(16, 14, 16, 10)
         col.setSpacing(12)
         self.stack = QStackedWidget()
-        for page in (self.live, self.blocked, self.friends, self.settings):
+        for page in (
+            self.live,
+            self.blocked,
+            self.reports,
+            self.recordings,
+            self.settings,
+            self.friends,
+        ):
             self.stack.addWidget(page)
         col.addWidget(self.stack, 1)
         col.addWidget(self._footer())
@@ -1146,6 +1232,22 @@ class MainWindow(QMainWindow):
         self.blocked = BlockedPage(self)
         self.friends = FriendsPage(self)
         self.settings = SettingsPage(self)
+        self.reports = FilesPage(
+            "Rapports",
+            "Rapports d'incident existants · lecture seule",
+            "Rapports d'incident",
+            "*.txt",
+            reports_directory,
+            "aucun rapport",
+        )
+        self.recordings = FilesPage(
+            "Enregistrements",
+            "Extraits réseau (métadonnées) du dossier de données · lecture seule",
+            "Enregistrements",
+            "*.csv",
+            lambda: recordings_directory(self.session),
+            "aucun enregistrement",
+        )
         self.nav: list[NavButton] = []
         for i, (name, ico) in enumerate(zip(self.PAGES, self.ICONS, strict=True)):
             b = NavButton(ico, name)
@@ -1271,6 +1373,9 @@ class MainWindow(QMainWindow):
         self.blocked.update_from(snap)
         self.friends.update_from(snap)
         self.settings.update_from(snap)
+        for files in (self.reports, self.recordings):
+            if self.stack.currentWidget() is files:
+                files.update_from(snap)
         self.panic.set_state(snap.panic)
         if snap.toggle is not None and snap.toggle != self._status_since:
             self._status_since = snap.toggle
@@ -1314,13 +1419,13 @@ class MainWindow(QMainWindow):
         if ip is not None:
             self.actions_.unblock(ip)
         else:
-            self.show_page(1)
+            self.show_page(self.BLOCKED)
         self.refresh()
 
     def friend_selected(self) -> None:
         ip = self.live.selected_ip()
         if ip is None:
-            self.show_page(2)
+            self.show_page(self.FRIENDS)
             return
         nick = ""
         if not self.session.ctrl.is_friend(ip):

@@ -154,6 +154,13 @@ class TimeWindow:
             del self._ts[: self._head]
             self._head = 0
 
+    def prune(self, older_than: float) -> None:
+        """Oublie les éléments <= ``older_than`` (fenêtre raccourcie)."""
+        self._head = bisect_right(self._ts, older_than, self._head)
+        if self._head >= COMPACT_AT:
+            del self._ts[: self._head]
+            self._head = 0
+
     @property
     def last(self) -> float:
         return self._ts[-1] if len(self) else float("-inf")
@@ -252,13 +259,26 @@ class SessionMonitor:
         self, shield_pps: object = SHIELD_PPS, shield_seconds: object = SHIELD_SECONDS
     ) -> None:
         self.peers: dict[str, PeerState] = {}
-        self.shield_pps = clamp_shield_pps(shield_pps)
-        self.shield_seconds = clamp_shield_seconds(shield_seconds)
         # Borne mémoire : au-delà, la moyenne dépasse forcément tout seuil permis.
         self.rate_cap = RATE_CAP
+        self.set_shield(shield_pps, shield_seconds)
+
+    def set_shield(self, shield_pps: object, shield_seconds: object) -> None:
+        """Change le seuil et le délai du bouclier en gardant l'état cohérent.
+
+        Reborne les deux valeurs, recalcule le nombre de tranches d'1 s et la
+        rétention. Si la rétention raccourcit, les horodatages trop anciens sont
+        oubliés tout de suite ; si elle s'allonge, l'historique déjà conservé reste
+        valide (il couvre simplement moins que la nouvelle fenêtre au début)."""
+        self.shield_pps = clamp_shield_pps(shield_pps)
+        self.shield_seconds = clamp_shield_seconds(shield_seconds)
         self.slices = max(MIN_SLICES, math.ceil(self.shield_seconds - _EPS))
         # Horodatages conservés : fenêtre de moyenne ET tranches d'1 s.
         self.retention = max(self.shield_seconds, float(self.slices))
+        for peer in self.peers.values():
+            last = peer.rate_ts.last
+            if last != float("-inf"):
+                peer.rate_ts.prune(last - self.retention + _EPS)
 
     # -- alimentation ----------------------------------------------------
     def add_packet(

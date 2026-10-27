@@ -6,8 +6,10 @@ import contextlib
 import ipaddress
 import logging
 import re
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from menu import livesession as ls
@@ -385,10 +387,68 @@ class GuiActions:
                 with contextlib.suppress(Exception):
                     s.ctrl.filters.settings = FilterSettings.from_config(data)
             with contextlib.suppress(Exception):
-                s.monitor.shield_pps = values[SHIELD_PPS_KEY]
-                s.monitor.shield_seconds = values[SHIELD_SECONDS_KEY]
+                s.monitor.set_shield(values[SHIELD_PPS_KEY], values[SHIELD_SECONDS_KEY])
             bb = getattr(s, "blackbox", None)
             if bb is not None:
                 with contextlib.suppress(Exception):
                     bb.seconds = values[RECORDING_KEY]
             return read_settings(data)
+
+
+# -- Rapports et enregistrements (lecture seule) ------------------------------
+@dataclass(frozen=True)
+class DataFile:
+    """Fichier du dossier de données : nom, taille (octets), date de modification."""
+
+    name: str
+    size: int
+    mtime: float
+
+    def when(self) -> str:
+        return time.strftime("%d/%m/%Y %H:%M:%S", time.localtime(self.mtime))
+
+
+def list_files(directory: Path | None, pattern: str) -> list[DataFile]:
+    """Liste ``pattern`` dans ``directory``, du plus récent au plus ancien.
+
+    Lecture seule : ne crée pas le dossier, ne lit pas le contenu des fichiers ;
+    toute erreur donne une liste vide (ou partielle)."""
+    out: list[DataFile] = []
+    if directory is None:
+        return out
+    try:
+        paths = list(directory.glob(pattern)) if directory.is_dir() else []
+    except OSError:
+        return out
+    for path in paths:
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if path.is_file() and not path.name.startswith("."):
+            out.append(DataFile(path.name, int(st.st_size), float(st.st_mtime)))
+    out.sort(key=lambda f: (f.mtime, f.name), reverse=True)
+    return out
+
+
+def reports_directory() -> Path | None:
+    try:
+        from network.incident import reports_dir
+
+        return reports_dir()
+    except Exception:
+        return None
+
+
+def recordings_directory(session: Any) -> Path | None:
+    """Dossier des enregistrements de la boîte noire, sans le créer."""
+    bb = getattr(session, "blackbox", None)
+    d = getattr(bb, "_directory", None)
+    try:
+        if d is not None:
+            return Path(d() if callable(d) else d)
+        from network.recorder import recordings_dir
+
+        return recordings_dir()
+    except Exception:
+        return None

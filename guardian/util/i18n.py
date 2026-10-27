@@ -488,12 +488,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Block refused: {ip} is a Rockstar server (you would lose the session)",
     },
     "gui.shield_help": {
-        "fr": "Coupure si une IP dépasse le seuil en moyenne sur le délai choisi. "
-        "Délai minimal : 3 s. Les inondations (plus de 3× le seuil) sont coupées "
-        "plus vite.",
-        "en": "Cut off when an IP exceeds the threshold on average over the chosen "
-        "delay. Minimum delay: 3 s. Floods (over 3× the threshold) are cut off "
-        "faster.",
+        "fr": "Une rafale partant d'un débit bas est coupée au plus tôt après 3 s "
+        "(réglage par défaut). Jamais pour les amis, la liste blanche, "
+        "Rockstar/Take-Two ou Azure. Limite connue : 3 s de silence puis 2 s "
+        "jusqu'à ~600 paquets/s, en boucle, n'est pas coupé.",
+        "en": "A burst starting from a low rate is cut off after 3 s at the "
+        "earliest (default setting). Never for friends, the whitelist, "
+        "Rockstar/Take-Two or Azure. Known limitation: 3 s of silence then 2 s "
+        "at up to ~600 packets/s, repeated, is not cut off.",
     },
     "live.ev.auto_toggled": {
         "fr": "Bouclier auto : {state}",

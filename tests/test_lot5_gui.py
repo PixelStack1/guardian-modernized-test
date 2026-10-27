@@ -319,9 +319,62 @@ def test_settings_shield_help_text_fr_en(qtbot, win):
     try:
         win.settings.lang_fr.click()
         fr = win.settings.shield_help.text()
-        assert "moyenne" in fr and "3 s" in fr and "inondations" in fr
+        assert fr.startswith("Une rafale partant d'un débit bas")
+        assert "Rockstar/Take-Two ou Azure" in fr and "~600 paquets/s" in fr
         win.settings.lang_en.click()
         en = win.settings.shield_help.text()
-        assert "average" in en and "3 s" in en and "Floods" in en
+        assert en.startswith("A burst starting from a low rate")
+        assert "Rockstar/Take-Two or Azure" in en and "~600 packets/s" in en
     finally:
         set_language(before, persist=False)
+
+
+def test_sidebar_order_matches_mockup_plus_friends(win):
+    assert [b.txt.text() for b in win.nav] == [
+        "Session en direct",
+        "Joueurs bloqués",
+        "Rapports",
+        "Enregistrements",
+        "Réglages",
+        "Amis",
+    ]
+    win.nav[win.FRIENDS].click()
+    assert win.stack.currentWidget() is win.friends
+
+
+def test_reports_page_lists_existing_reports_read_only(win):
+    from network.incident import reports_dir
+
+    d = reports_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "20261027-142201_176.4.29.17.txt").write_text("rapport")
+    (d / "20261027-142201_176.4.29.17.json").write_text("{}")
+    before = sorted(p.name for p in d.iterdir())
+    win.nav[win.REPORTS].click()
+    win.reports.rescan()
+    names = [
+        win.reports.table.item(i, 0).text() for i in range(win.reports.table.rowCount())
+    ]
+    assert "20261027-142201_176.4.29.17.txt" in names
+    assert all(n.endswith(".txt") for n in names)
+    assert sorted(p.name for p in d.iterdir()) == before  # rien écrit ni supprimé
+
+
+def test_recordings_page_lists_data_folder_recordings(win, session, tmp_path):
+    d = core.recordings_directory(session)
+    assert d == tmp_path
+    (d / "kick-20261027-142205-kick.csv").write_text("ts,ip,size\n")
+    (d / ".tmp-abc.csv").write_text("")  # écriture interrompue : ignorée
+    win.nav[win.RECORDINGS].click()
+    win.recordings.rescan()
+    t = win.recordings.table
+    assert [t.item(i, 0).text() for i in range(t.rowCount())] == [
+        "kick-20261027-142205-kick.csv"
+    ]
+    assert "1 fichier" in win.recordings.meta.text()
+
+
+def test_files_listing_missing_folder_is_empty_and_not_created(tmp_path):
+    missing = tmp_path / "absent"
+    assert core.list_files(missing, "*.csv") == []
+    assert not missing.exists()
