@@ -84,6 +84,12 @@ if __name__ == "__main__":
         logger.info("WinDivert binaries verified: %s", hashes)
         driver = DriverLifecycle(pydivert.WinDivert)
         driver.start()
+        # Lot 7 : notre handle (session en fond) est fermé AVANT le pilote, et le
+        # nettoyage couvre aussi fermeture de console / déconnexion / arrêt.
+        from menu.livesession import stop_background
+
+        driver.add_pre_cleanup(stop_background)
+        driver.install_console_handler()
         try:
             probe_filter(extra_ports_enabled())
         except FilterOpenError as e:
@@ -103,7 +109,7 @@ if __name__ == "__main__":
         elif gui_mode(sys.argv):
             from gui.app import run_gui
 
-            run_gui(version=__version__)
+            run_gui(version=__version__, on_shutdown=driver.cleanup)
         else:
             Menu.main_menu()
     except KeyboardInterrupt:

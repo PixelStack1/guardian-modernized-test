@@ -1,5 +1,14 @@
 # Changelog
 
+## Non publié — Lot 7 (extras)
+
+- Amis : jamais jetés par la capture (même bloqués, en panique ou verrou), blocage manuel refusé, ignorés par le bouclier auto, retirés des blocages chargés au démarrage. Page « Amis » traduite (i18n).
+- Profils en un clic Solo / Entre amis / Publique (préréglages des bascules existantes, sauvegardés dans data.json).
+- Raccourcis globaux Windows (RegisterHotKey) : Ctrl+Alt+F12 arrêt d'urgence, Ctrl+Alt+Maj+X panique, Ctrl+Alt+Maj+A/T/V bouclier/blocage total/verrou (Maj ajouté : Ctrl+Alt = AltGr sur clavier français).
+- Arrêt d'urgence : la capture laisse tout passer (`w.send(packet)` seul), blocages en mémoire levés, modes de rejet coupés ; fichiers inchangés ; la reprise rétablit les blocages enregistrés et les 5 bascules à l’identique (data.json réécrit à l’identique).
+- Arrêt propre du pilote : session en fond fermée avant le service WinDivert, aussi sur fermeture de console / déconnexion / arrêt (SetConsoleCtrlHandler) et aboutToQuit.
+- Diagnostic au démarrage (admin, WinDivert intègre, data.json lisible) et SHA256 de l'exécutable dans les Réglages.
+
 ## Non publié — Lot 5 (interface, alignement maquette)
 
 - Interface PySide6 recalée sur la maquette `guardian-ui-mockup` : barre latérale 220 px (marque, navigation 39 px, sélecteur FR/EN, état du pilote), cartes de bascule 83 px, statistiques 64 px, tableau 37 px par ligne avec drapeaux, badges et mini-barres, panneau d'alertes 280 px avec pastille colorée et horodatage, pied de page 22 px.

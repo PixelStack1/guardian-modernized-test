@@ -487,6 +487,153 @@ STRINGS: dict[str, dict[str, str]] = {
         "fr": "Blocage refusé : {ip} est un serveur Rockstar (vous perdriez la session)",
         "en": "Block refused: {ip} is a Rockstar server (you would lose the session)",
     },
+    # -- lot 7 : extras -------------------------------------------------
+    "live.ev.emergency_on": {
+        "fr": "ARRÊT D'URGENCE : filtrage suspendu, {n} blocage(s) levé(s) — tout le trafic passe",
+        "en": "EMERGENCY STOP: filtering paused, {n} block(s) lifted — all traffic passes",
+    },
+    "live.ev.emergency_off": {
+        "fr": "Filtrage repris : blocages enregistrés rétablis",
+        "en": "Filtering resumed: saved blocks restored",
+    },
+    "live.ev.friend_refused": {
+        "fr": "Blocage refusé : {ip} est dans la liste d'amis",
+        "en": "Block refused: {ip} is on the friend list",
+    },
+    "live.ev.profile": {
+        "fr": "Profil appliqué : {name}",
+        "en": "Profile applied: {name}",
+    },
+    "profile.solo": {"fr": "Solo", "en": "Solo"},
+    "profile.friends": {"fr": "Entre amis", "en": "With friends"},
+    "profile.public": {"fr": "Publique", "en": "Public"},
+    "profile.solo.desc": {
+        "fr": "Seuls vos amis et les serveurs Rockstar passent (panique), bouclier auto, coupure des récidivistes.",
+        "en": "Only your friends and Rockstar servers pass (panic), auto shield, offender cut.",
+    },
+    "profile.friends.desc": {
+        "fr": "Verrou de session (personne de nouveau), bouclier auto, coupure des récidivistes ; amis toujours autorisés.",
+        "en": "Session lock (no newcomers), auto shield, offender cut; friends always allowed.",
+    },
+    "profile.public.desc": {
+        "fr": "Session ouverte : bouclier auto et coupure des récidivistes seulement.",
+        "en": "Open session: auto shield and offender cut only.",
+    },
+    "gui.profiles.title": {"fr": "Profils en un clic", "en": "One-click profiles"},
+    "gui.profiles.hint": {
+        "fr": "Préréglages des bascules existantes, appliqués immédiatement.",
+        "en": "Presets of the existing toggles, applied immediately.",
+    },
+    "gui.emergency": {"fr": "Arrêt d'urgence", "en": "Emergency stop"},
+    "gui.emergency.desc": {
+        "fr": "Lève tous les blocages, tout passe",
+        "en": "Lifts every block, everything passes",
+    },
+    "gui.emergency.on": {
+        "fr": "FILTRAGE SUSPENDU (arrêt d'urgence) — {hk} pour reprendre",
+        "en": "FILTERING PAUSED (emergency stop) — {hk} to resume",
+    },
+    "gui.hotkeys.title": {"fr": "Raccourcis globaux", "en": "Global hotkeys"},
+    "gui.hotkeys.hint": {
+        "fr": "Actifs même quand Guardian n'a pas le focus (Windows).",
+        "en": "Active even when Guardian is not focused (Windows).",
+    },
+    "gui.hotkeys.off": {
+        "fr": "Raccourcis globaux indisponibles : {err}",
+        "en": "Global hotkeys unavailable: {err}",
+    },
+    "gui.hotkeys.taken": {
+        "fr": "déjà utilisé par un autre programme",
+        "en": "already used by another program",
+    },
+    "hotkey.emergency": {
+        "fr": "Arrêt d'urgence / reprise",
+        "en": "Emergency stop / resume",
+    },
+    "hotkey.panic": {"fr": "Panique (amis seuls)", "en": "Panic (friends only)"},
+    "hotkey.auto": {"fr": "Bouclier auto", "en": "Auto shield"},
+    "hotkey.total": {"fr": "Blocage total", "en": "Total block"},
+    "hotkey.lock": {"fr": "Verrou de session", "en": "Session lock"},
+    "gui.health.title": {"fr": "Diagnostic au démarrage", "en": "Startup health check"},
+    "gui.health.hint": {
+        "fr": "Vérifications faites au lancement.",
+        "en": "Checks run at launch.",
+    },
+    "gui.health.ok_all": {"fr": "Tout est en ordre", "en": "All good"},
+    "gui.health.problem": {
+        "fr": "Diagnostic : {n} problème(s) — voir Réglages",
+        "en": "Health check: {n} problem(s) — see Settings",
+    },
+    "health.admin": {"fr": "Droits administrateur", "en": "Administrator rights"},
+    "health.windivert": {
+        "fr": "WinDivert présent et intègre",
+        "en": "WinDivert present and genuine",
+    },
+    "health.config": {
+        "fr": "Configuration lisible (data.json)",
+        "en": "Configuration readable (data.json)",
+    },
+    "health.ok": {"fr": "OK", "en": "OK"},
+    "health.fail": {"fr": "ÉCHEC", "en": "FAILED"},
+    "health.unknown": {"fr": "non vérifiable", "en": "cannot check"},
+    "health.not_windows": {
+        "fr": "non vérifiable hors Windows",
+        "en": "cannot check outside Windows",
+    },
+    "health.no_admin": {
+        "fr": "Guardian n'est pas lancé en administrateur",
+        "en": "Guardian is not running as administrator",
+    },
+    "health.missing_config": {
+        "fr": "data.json absent (créé à la première sauvegarde)",
+        "en": "data.json missing (created on first save)",
+    },
+    "gui.exe.title": {
+        "fr": "Empreinte de l'exécutable",
+        "en": "Executable fingerprint",
+    },
+    "gui.exe.hint": {
+        "fr": "SHA256 du programme en cours, à comparer au fichier SHA256SUMS de la publication.",
+        "en": "SHA256 of the running program, compare with the release SHA256SUMS file.",
+    },
+    "gui.exe.source": {
+        "fr": "Exécution depuis les sources (pas d'exécutable compilé)",
+        "en": "Running from source (no compiled executable)",
+    },
+    "gui.exe.error": {
+        "fr": "Empreinte impossible à calculer : {e}",
+        "en": "Cannot compute fingerprint: {e}",
+    },
+    "gui.exe.copy": {"fr": "Copier", "en": "Copy"},
+    "gui.friends.spoof": {
+        "fr": "À savoir : Guardian filtre par adresse IP. Quelqu'un qui usurpe "
+        "l'adresse IP d'un ami passe tous les filtres (limite inhérente au filtrage "
+        "par IP) ; n'ajoutez que des adresses de confiance et retirez-les après la "
+        "session si besoin.",
+        "en": "Note: Guardian filters by IP address. Someone spoofing a friend's IP "
+        "address bypasses every filter (inherent to IP filtering); only add trusted "
+        "addresses and remove them after the session if needed.",
+    },
+    "gui.friends.title": {"fr": "Amis", "en": "Friends"},
+    "gui.friends.hint": {
+        "fr": "Jamais bloqués ni bloqués automatiquement, même en mode panique",
+        "en": "Never blocked nor auto-blocked, even in panic mode",
+    },
+    "gui.friends.list": {"fr": "Liste des amis", "en": "Friend list"},
+    "gui.friends.count": {"fr": "{n} ami(s)", "en": "{n} friend(s)"},
+    "gui.friends.ip": {"fr": "Adresse IP", "en": "IP address"},
+    "gui.friends.nick": {"fr": "Pseudo", "en": "Nickname"},
+    "gui.friends.add": {"fr": "Ajouter", "en": "Add"},
+    "gui.friends.remove": {"fr": "Retirer la sélection", "en": "Remove selected"},
+    "gui.friends.added": {
+        "fr": "Ami ajouté (débloqué s'il était bloqué).",
+        "en": "Friend added (unblocked if it was blocked).",
+    },
+    "gui.friends.refused": {
+        "fr": "Adresse invalide, serveur Rockstar ou liste pleine.",
+        "en": "Invalid address, Rockstar server or list full.",
+    },
+    "gui.friends.removed": {"fr": "Ami retiré.", "en": "Friend removed."},
     "gui.shield_help": {
         "fr": "Une rafale partant d'un débit bas est coupée au plus tôt après 3 s "
         "(réglage par défaut). Jamais pour les amis, la liste blanche, "

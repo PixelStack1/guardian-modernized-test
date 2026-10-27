@@ -89,6 +89,7 @@ class Snapshot:
     friends: tuple[tuple[str, str], ...] = ()
     offenders: int = 0
     blackbox_seconds: int = 0
+    paused: bool = False
 
 
 def toggle_message(ctrl: Any) -> tuple[str, bool] | None:
@@ -183,6 +184,7 @@ def take_snapshot(session: Any, now: float | None = None) -> Snapshot:
             friends=tuple(dict(ctrl.friends).items()),
             offenders=len(ctrl.offenders) if ctrl.offenders is not None else 0,
             blackbox_seconds=int(getattr(bb, "seconds", 0) or 0),
+            paused=bool(getattr(ctrl, "filtering_paused", False)),
         )
 
 
