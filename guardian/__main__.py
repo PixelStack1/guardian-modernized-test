@@ -11,7 +11,7 @@ from network.sessions import FilterOpenError, extra_ports_enabled, probe_filter
 from util import cimode
 from util.console import attach_console
 from util.crash import crash_report
-from util.driver import DriverLifecycle
+from util.driver import DriverLifecycle, mark_owned
 from util.i18n import t
 from util.integrity import IntegrityError, secure_windivert
 from util.paths import data_file
@@ -80,8 +80,9 @@ if __name__ == "__main__":
     # Lot 8 : un enfant multiprocessing quitte si la GUI qui l'a lancé est tuée.
     with contextlib.suppress(Exception):
         from util import parentwatch as _pw
+        from util.driver import orphan_cleanup as _orphan
 
-        _pw.watch_spawn_parent(sys.argv)
+        _pw.watch_spawn_parent(sys.argv, on_parent_exit=_orphan)
     freeze_support()
     # Lot 8 : banc d'acceptation CI uniquement (inerte sans --ci-probe).
     CI_PROBE = cimode.probe_path(sys.argv)
@@ -115,6 +116,7 @@ if __name__ == "__main__":
         logger.info("WinDivert binaries verified: %s", hashes)
         driver = DriverLifecycle(pydivert.WinDivert)
         driver.start()
+        mark_owned(driver.loaded_by_guardian)  # pour le nettoyage par les workers
         # Lot 7 : notre handle (session en fond) est fermé AVANT le pilote, et le
         # nettoyage couvre aussi fermeture de console / déconnexion / arrêt.
         from menu.livesession import stop_background

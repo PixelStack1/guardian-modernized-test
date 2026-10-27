@@ -231,7 +231,7 @@ def test_worker_parent_watchdog_only_in_mp_children(monkeypatch):
 def test_open_windivert_arms_worker_watchdog():
     src = (ROOT / "guardian" / "network" / "sessions.py").read_text("utf-8")
     body = src[src.index("def open_windivert") : src.index("def probe_filter")]
-    assert body.index("handle.open()") < body.index("watch_worker_parent()")
+    assert body.index("handle.open()") < body.index("watch_worker_parent(")
 
 
 def test_spawn_parent_watchdog_from_argv(monkeypatch):
@@ -251,4 +251,61 @@ def test_spawn_parent_watchdog_from_argv(monkeypatch):
     )
     assert seen == [2596] and len(started) == 1
     src = (ROOT / "guardian" / "__main__.py").read_text("utf-8")
-    assert src.index("watch_spawn_parent(sys.argv)") < src.index("freeze_support()\n")
+    assert src.index("watch_spawn_parent(sys.argv") < src.index("freeze_support()\n")
+
+
+def test_orphan_cleanup_closes_handles_then_unregisters_if_owned(monkeypatch):
+    from util import driver as drv
+
+    log = []
+
+    class H:
+        def __init__(self, n):
+            self.n = n
+
+        def close(self):
+            log.append(f"close{self.n}")
+
+    class Bad:
+        def close(self):
+            raise OSError("x")
+
+    class WD:
+        @staticmethod
+        def unregister():
+            log.append("unregister")
+
+    monkeypatch.setattr(drv, "_open_handles", {})
+    h = H(1)
+    drv.track_handle(h)
+    drv.track_handle(Bad())
+    drv.track_handle(H(2))
+    drv.untrack_handle(h)
+    monkeypatch.delenv(drv.OWNED_ENV, raising=False)
+    assert drv.orphan_cleanup(WD) == ["close"]  # pilote pas chargé par Guardian
+    assert log == ["close2"]
+    log.clear()
+    monkeypatch.setenv(drv.OWNED_ENV, "0")
+    drv.mark_owned(False)
+    assert os.environ[drv.OWNED_ENV] == "0"
+    drv.mark_owned(True)
+    assert drv.orphan_cleanup(WD) == ["close", "unregister"]
+    assert log == ["close2", "unregister"]  # fermer AVANT de désenregistrer
+
+    class Boom:
+        @staticmethod
+        def unregister():
+            raise OSError("in use")
+
+    assert drv.orphan_cleanup(Boom) == ["close"]  # jamais d'exception
+
+
+def test_spawn_watchdog_wired_with_orphan_cleanup():
+    src = (ROOT / "guardian" / "__main__.py").read_text("utf-8")
+    assert "watch_spawn_parent(sys.argv, on_parent_exit=_orphan)" in src
+    assert src.index("driver.start()") < src.index(
+        "mark_owned(driver.loaded_by_guardian)"
+    )
+    s = (ROOT / "guardian" / "network" / "sessions.py").read_text("utf-8")
+    body = s[s.index("def open_windivert") : s.index("def probe_filter")]
+    assert "track_handle(handle)" in body and "untrack_handle(handle)" in body

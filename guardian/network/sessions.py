@@ -15,6 +15,7 @@ import pydivert
 from network.sessioninfo import SessionInfo
 from util import parentwatch
 from util.console import get_original_console_title, set_console_title
+from util.driver import orphan_cleanup, track_handle, untrack_handle
 from util.dynamicblacklist import T2_EU_FALLBACK, T2_US_FALLBACK
 from util.network import construct_cidr_block_set, ip_in_cidr_block_set
 from util.types import CIDR_BLOCK
@@ -138,10 +139,12 @@ def open_windivert(
         ) from e
     # Lot 8 : un worker orphelin (GUI tuée) se termine, fermant le handle.
     with contextlib.suppress(Exception):
-        parentwatch.watch_worker_parent()
+        parentwatch.watch_worker_parent(on_parent_exit=orphan_cleanup)
+    track_handle(handle)
     try:
         yield handle
     finally:
+        untrack_handle(handle)
         if handle.is_open:
             handle.close()
 

@@ -93,9 +93,14 @@ def start_parent_watchdog(
 _worker_watch_started = False
 
 
+def _no_cleanup() -> None:
+    return None
+
+
 def watch_worker_parent(
     probe: Callable[[int], Callable[[], bool] | None] | None = None,
     start: Callable[..., Any] = start_parent_watchdog,
+    on_parent_exit: Callable[[], Any] | None = None,
 ) -> bool:
     """Capture workers (multiprocessing children holding a WinDivert handle):
     exit when the GUI process that spawned them disappears (taskkill /F, crash),
@@ -113,7 +118,7 @@ def watch_worker_parent(
     alive = windows_parent_probe(pid=ppid) if probe is None else probe(ppid)
     if alive is None:
         return False
-    start(alive, lambda: None)
+    start(alive, on_parent_exit or _no_cleanup)
     _worker_watch_started = True
     return True
 
@@ -137,6 +142,7 @@ def watch_spawn_parent(
     argv: list[str],
     probe: Callable[[int], Callable[[], bool] | None] | None = None,
     start: Callable[..., Any] = start_parent_watchdog,
+    on_parent_exit: Callable[[], Any] | None = None,
 ) -> bool:
     """Tout enfant multiprocessing (worker de capture, serveur Manager) se termine
     quand son lanceur (la GUI) disparaît — handle WinDivert fermé, aucun orphelin.
@@ -148,6 +154,6 @@ def watch_spawn_parent(
     alive = windows_parent_probe(pid=pid) if probe is None else probe(pid)
     if alive is None:
         return False
-    start(alive, lambda: None)
+    start(alive, on_parent_exit or _no_cleanup)
     _worker_watch_started = True
     return True

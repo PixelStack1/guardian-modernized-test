@@ -141,3 +141,57 @@ class DriverLifecycle:
         except Exception as e:
             logger.warning("SetConsoleCtrlHandler failed: %s", e)
             return False
+
+
+# Lot 8 — GUI tuée (taskkill /F) : les workers survivants nettoient eux-mêmes.
+OWNED_ENV = "GUARDIAN_DRIVER_OWNED"  # « 1 » si Guardian a chargé le pilote (hérité)
+_open_handles: dict[int, Any] = {}  # par id() : aucun appel à __hash__
+_handles_lock = threading.Lock()
+
+
+def track_handle(handle: Any) -> None:
+    with _handles_lock:
+        _open_handles[id(handle)] = handle
+
+
+def untrack_handle(handle: Any) -> None:
+    with _handles_lock:
+        _open_handles.pop(id(handle), None)
+
+
+def mark_owned(loaded_by_guardian: bool) -> None:
+    """Transmis aux workers lancés ensuite (environnement hérité)."""
+    import os
+
+    if loaded_by_guardian:
+        os.environ[OWNED_ENV] = "1"
+
+
+def orphan_cleanup(windivert: Any = None) -> list[str]:
+    """Appelé dans un worker quand la GUI a disparu : fermer NOS handles (fail-open :
+    le trafic n'est plus détourné), puis, si Guardian avait chargé le pilote, le
+    désenregistrer (échoue sans effet tant qu'un autre handle reste ouvert ; le
+    dernier worker à fermer réussit). Jamais d'exception."""
+    import os
+
+    steps: list[str] = []
+    with _handles_lock:
+        handles = list(_open_handles.values())
+    for h in handles:
+        try:
+            h.close()
+            steps.append("close")
+        except Exception as e:
+            logger.warning("orphan cleanup: close failed: %s", e)
+    if os.environ.get(OWNED_ENV) != "1":
+        return steps
+    try:
+        if windivert is None:
+            import pydivert
+
+            windivert = pydivert.WinDivert
+        windivert.unregister()
+        steps.append("unregister")
+    except Exception as e:
+        logger.warning("orphan cleanup: unregister failed: %s", e)
+    return steps
