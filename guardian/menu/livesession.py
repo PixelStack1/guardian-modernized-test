@@ -591,6 +591,7 @@ class LiveSessionController:
         # Lot 7 : arrêt d'urgence (drapeau partagé : la capture laisse tout passer).
         self.bypass_flag = bypass_flag
         self._paused = False
+        self._saved_toggles: dict[str, bool] | None = None
         # Lot 3 : débordement des IP vues (drapeau partagé) et filtres d'information.
         self.overflow_flag = overflow_flag
         self.seen_overflow_local = False
@@ -744,7 +745,18 @@ class LiveSessionController:
         """Arrêt d'urgence (lot 7) : la capture laisse TOUT passer (w.send du paquet
         original), tous les blocages en mémoire sont levés et chaque mode de rejet
         est désactivé. Les fichiers (data.json, auto_block.json) ne sont PAS modifiés :
-        ``resume_filtering`` rétablit les blocages persistants."""
+        ``resume_filtering`` rétablit les blocages persistants ET les 5 bascules
+        (panique, verrou, coupure des récidivistes, bouclier auto, blocage total)
+        exactement comme avant l'arrêt."""
+        if self._paused:
+            return  # déjà suspendu : l'instantané d'origine est conservé
+        self._saved_toggles = {
+            "panic": bool(self.panic),
+            "session_lock": bool(self.session_lock),
+            "offender_drop": bool(self.offender_drop),
+            "auto_block": bool(self.auto_block),
+            "total_block": bool(self.total_block),
+        }
         self._paused = True
         self._write_flag(self.bypass_flag, True)
         self.panic = False
@@ -771,6 +783,13 @@ class LiveSessionController:
             for ip, expiry in list(self.auto_entries.items()):
                 if now < expiry and not self.is_friend(ip):
                     self.blocked[ip] = expiry
+        saved, self._saved_toggles = self._saved_toggles, None
+        if saved is not None:
+            self.panic = saved["panic"]
+            self.session_lock = saved["session_lock"]
+            self.offender_drop = saved["offender_drop"]
+            self.auto_block = saved["auto_block"] and self.auto_block_available
+            self.total_block = saved["total_block"] and self.auto_block_available
         self._paused = False
         self._write_flag(self.bypass_flag, False)
         self.events.append(t("live.ev.emergency_off"))

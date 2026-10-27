@@ -374,3 +374,99 @@ def test_gui_friends_page_texts_and_unblock(gui, qtbot):
     w.friends.list.setCurrentRow(0)
     qtbot.mouseClick(w.friends.remove, Qt.MouseButton.LeftButton)
     assert w.friends.message.text() == "Ami retiré."
+
+
+# -- correctifs d'audit (R1-R4) -------------------------------------------------
+def test_r1_emergency_restores_exact_toggles_and_data_json(tmp_path):
+    from gui.profiles import toggle_emergency
+
+    s = make_session(tmp_path)
+    c = s.ctrl
+    c.panic, c.session_lock, c.offender_drop, c.auto_block, c.total_block = (
+        True,
+        True,
+        True,
+        True,
+        True,
+    )
+    before = dict(s.config.data)
+    assert toggle_emergency(s)
+    assert c.filtering_paused
+    assert not any(
+        (c.panic, c.session_lock, c.offender_drop, c.auto_block, c.total_block)
+    )
+    assert s.config.data == before  # data.json jamais modifié pendant l'arrêt
+    c.emergency_stop()  # second appel : l'instantané d'origine est conservé
+    assert toggle_emergency(s)
+    assert (c.panic, c.session_lock, c.offender_drop, c.auto_block, c.total_block) == (
+        True,
+        True,
+        True,
+        True,
+        True,
+    )
+    assert s.config.data[ls.SESSION_LOCK_KEY] is True
+    assert s.config.data[ls.AUTO_BLOCK_KEY] is True
+    assert s.config.data[ls.TOTAL_BLOCK_KEY] is True
+    assert s.config.data[ls.OFFENDER_DROP_KEY] is True
+
+
+def test_r1_emergency_keeps_off_toggles_off(tmp_path):
+    from gui.profiles import toggle_emergency
+
+    s = make_session(tmp_path)
+    c = s.ctrl
+    c.auto_block, c.total_block, c.panic = True, False, False
+    toggle_emergency(s)
+    toggle_emergency(s)
+    assert (c.auto_block, c.total_block, c.panic, c.session_lock) == (
+        True,
+        False,
+        False,
+        False,
+    )
+
+
+def test_r1_shield_cuts_300pps_after_emergency_resume(tmp_path):
+    from gui.profiles import toggle_emergency
+
+    s = make_session(tmp_path)
+    assert s.ctrl.auto_block
+    toggle_emergency(s)
+    toggle_emergency(s)
+    assert s.ctrl.auto_block and not s.ctrl.filtering_paused
+    flood = "176.4.29.17"
+    feed(s, peers=[(flood, 300, 40)], seconds=8.0)
+    assert flood in s.ctrl.blocked
+
+
+def test_r2_letter_hotkeys_use_shift_not_altgr():
+    from util.hotkeys import MOD_ALT, MOD_CONTROL, MOD_SHIFT
+
+    by = {h.action: h for h in DEFAULT_HOTKEYS}
+    assert by["emergency"].text == "Ctrl+Alt+F12"
+    assert not by["emergency"].mods & MOD_SHIFT
+    for a, letter in (("panic", "X"), ("auto", "A"), ("total", "T"), ("lock", "V")):
+        assert by[a].mods == MOD_CONTROL | MOD_ALT | MOD_SHIFT
+        assert by[a].text == f"Ctrl+Alt+Maj+{letter}"
+
+
+def test_r3_commit_data_request_cleanup(monkeypatch):
+    from gui import app
+
+    calls = []
+    monkeypatch.setattr(ls, "stop_background", lambda: calls.append("session"))
+    wd = FakeWD()
+    d = DriverLifecycle(wd)
+    d.start()
+    app.session_end_cleanup(d.cleanup)
+    app.session_end_cleanup(d.cleanup)  # idempotent
+    assert calls == ["session", "session"]
+    assert wd.calls == ["register", "unregister"]
+    app.session_end_cleanup(lambda: (_ for _ in ()).throw(RuntimeError("x")))
+
+
+def test_r4_spoof_note_on_friends_page(gui):
+    w, _s, _api = gui
+    assert "usurpe" in w.friends.spoof_note.text()
+    assert "Ctrl+Alt+Maj+X" in w.settings.hotkeys_text.text()

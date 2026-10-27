@@ -4,8 +4,8 @@
 
 - Amis : jamais jetés par la capture (même bloqués, en panique ou verrou), blocage manuel refusé, ignorés par le bouclier auto, retirés des blocages chargés au démarrage. Page « Amis » traduite (i18n).
 - Profils en un clic Solo / Entre amis / Publique (préréglages des bascules existantes, sauvegardés dans data.json).
-- Raccourcis globaux Windows (RegisterHotKey) : Ctrl+Alt+F12 arrêt d'urgence, Ctrl+Alt+X panique, Ctrl+Alt+A/T/V bouclier/blocage total/verrou.
-- Arrêt d'urgence : la capture laisse tout passer (`w.send(packet)` seul), blocages en mémoire levés, modes de rejet coupés ; fichiers inchangés, reprise = blocages enregistrés rétablis.
+- Raccourcis globaux Windows (RegisterHotKey) : Ctrl+Alt+F12 arrêt d'urgence, Ctrl+Alt+Maj+X panique, Ctrl+Alt+Maj+A/T/V bouclier/blocage total/verrou (Maj ajouté : Ctrl+Alt = AltGr sur clavier français).
+- Arrêt d'urgence : la capture laisse tout passer (`w.send(packet)` seul), blocages en mémoire levés, modes de rejet coupés ; fichiers inchangés ; la reprise rétablit les blocages enregistrés et les 5 bascules à l’identique (data.json réécrit à l’identique).
 - Arrêt propre du pilote : session en fond fermée avant le service WinDivert, aussi sur fermeture de console / déconnexion / arrêt (SetConsoleCtrlHandler) et aboutToQuit.
 - Diagnostic au démarrage (admin, WinDivert intègre, data.json lisible) et SHA256 de l'exécutable dans les Réglages.
 

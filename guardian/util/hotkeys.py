@@ -43,13 +43,15 @@ def _letter(c: str) -> int:
     return ord(c.upper())
 
 
-# Ctrl+Alt : combinaisons peu utilisées par les jeux ; F12 isolé pour l'urgence.
+# Lettres en Ctrl+Alt+Maj : Ctrl+Alt seul = AltGr sur les claviers français
+# (AltGr+X/A/T/V servent à taper des caractères). F12 isolé pour l'urgence.
+_CAS = MOD_CONTROL | MOD_ALT | MOD_SHIFT
 DEFAULT_HOTKEYS: tuple[Hotkey, ...] = (
     Hotkey("emergency", MOD_CONTROL | MOD_ALT, VK_F12, "Ctrl+Alt+F12"),
-    Hotkey("panic", MOD_CONTROL | MOD_ALT, _letter("X"), "Ctrl+Alt+X"),
-    Hotkey("auto", MOD_CONTROL | MOD_ALT, _letter("A"), "Ctrl+Alt+A"),
-    Hotkey("total", MOD_CONTROL | MOD_ALT, _letter("T"), "Ctrl+Alt+T"),
-    Hotkey("lock", MOD_CONTROL | MOD_ALT, _letter("V"), "Ctrl+Alt+V"),
+    Hotkey("panic", _CAS, _letter("X"), "Ctrl+Alt+Maj+X"),
+    Hotkey("auto", _CAS, _letter("A"), "Ctrl+Alt+Maj+A"),
+    Hotkey("total", _CAS, _letter("T"), "Ctrl+Alt+Maj+T"),
+    Hotkey("lock", _CAS, _letter("V"), "Ctrl+Alt+Maj+V"),
 )
 
 

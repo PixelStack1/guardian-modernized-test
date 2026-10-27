@@ -56,7 +56,7 @@ from gui.core import (
     reports_directory,
     take_snapshot,
 )
-from gui.profiles import PROFILES, apply_profile, current_profile
+from gui.profiles import PROFILES, apply_profile, current_profile, toggle_emergency
 from gui.widgets import (
     HEAD_H,
     ROW_H,
@@ -723,6 +723,9 @@ class FriendsPage(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(12)
         lay.addLayout(page_header(t("gui.friends.title"), t("gui.friends.hint")))
+        self.spoof_note = label(t("gui.friends.spoof"), "setDesc", wrap=True)
+        self.spoof_note.setObjectName("friendsSpoofNote")
+        lay.addWidget(self.spoof_note)
         p, pl, _head, self.meta = panel(t("gui.friends.list"), "")
         self.list = QListWidget()
         self.list.setObjectName("friendsList")
@@ -1365,11 +1368,7 @@ class MainWindow(QMainWindow):
             self._run(fn)
 
     def toggle_emergency(self) -> None:
-        with self.session.lock:
-            try:
-                self.session.ctrl.toggle_emergency()
-            except Exception:
-                return
+        toggle_emergency(self.session)
         self.refresh()
 
     def apply_profile(self, key: str) -> None:

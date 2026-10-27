@@ -605,6 +605,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Cannot compute fingerprint: {e}",
     },
     "gui.exe.copy": {"fr": "Copier", "en": "Copy"},
+    "gui.friends.spoof": {
+        "fr": "À savoir : Guardian filtre par adresse IP. Quelqu'un qui usurpe "
+        "l'adresse IP d'un ami passe tous les filtres (limite inhérente au filtrage "
+        "par IP) ; n'ajoutez que des adresses de confiance et retirez-les après la "
+        "session si besoin.",
+        "en": "Note: Guardian filters by IP address. Someone spoofing a friend's IP "
+        "address bypasses every filter (inherent to IP filtering); only add trusted "
+        "addresses and remove them after the session if needed.",
+    },
     "gui.friends.title": {"fr": "Amis", "en": "Friends"},
     "gui.friends.hint": {
         "fr": "Jamais bloqués ni bloqués automatiquement, même en mode panique",

@@ -14,10 +14,14 @@ Policy (documented choice):
 
 Lot 7 (arrêt propre) : avant de fermer le pilote, les fonctions ``add_pre_cleanup``
 (arrêt de la session en fond = fermeture de NOTRE handle WinDivert) sont appelées dans
-l'ordre inverse d'enregistrement ; puis les processus enfants ; puis le service. Sous
-Windows, ``install_console_handler`` couvre aussi la fermeture de la console, la
-déconnexion et l'arrêt de la machine (SetConsoleCtrlHandler). Toute erreur est
-journalisée et n'empêche jamais les étapes suivantes.
+l'ordre inverse d'enregistrement ; puis les processus enfants ; puis le service.
+``install_console_handler`` (SetConsoleCtrlHandler) ne couvre que les processus
+AVEC console (mode ``--console``) : Ctrl+C, fermeture de la console et, pour une
+console, déconnexion/arrêt. Dans l'exe fenêtré Qt (sans console), Windows n'envoie
+PAS CTRL_LOGOFF/CTRL_SHUTDOWN à ce gestionnaire : la fin de session y est gérée par
+``QGuiApplication.commitDataRequest`` (gui/app.py), qui appelle le même ``cleanup``
+idempotent, puis ``aboutToQuit``. Toute erreur est journalisée et n'empêche jamais
+les étapes suivantes.
 
 Only the network driver service is touched; nothing interacts with the game process.
 """

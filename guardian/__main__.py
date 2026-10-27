@@ -109,7 +109,7 @@ if __name__ == "__main__":
         elif gui_mode(sys.argv):
             from gui.app import run_gui
 
-            run_gui(version=__version__)
+            run_gui(version=__version__, on_shutdown=driver.cleanup)
         else:
             Menu.main_menu()
     except KeyboardInterrupt:
