@@ -77,6 +77,11 @@ def notify(text: str, console: bool | None = None) -> None:
 
 
 if __name__ == "__main__":
+    # Lot 8 : un enfant multiprocessing quitte si la GUI qui l'a lancé est tuée.
+    with contextlib.suppress(Exception):
+        from util import parentwatch as _pw
+
+        _pw.watch_spawn_parent(sys.argv)
     freeze_support()
     # Lot 8 : banc d'acceptation CI uniquement (inerte sans --ci-probe).
     CI_PROBE = cimode.probe_path(sys.argv)

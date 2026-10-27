@@ -116,3 +116,38 @@ def watch_worker_parent(
     start(alive, lambda: None)
     _worker_watch_started = True
     return True
+
+
+def spawn_parent_pid(argv: list[str]) -> int | None:
+    """PID du lanceur d'un enfant multiprocessing (``--multiprocessing-fork
+    parent_pid=N …``), sinon None."""
+    if "--multiprocessing-fork" not in argv:
+        return None
+    for arg in argv:
+        if arg.startswith("parent_pid="):
+            try:
+                pid = int(arg.split("=", 1)[1])
+            except ValueError:
+                return None
+            return pid if pid > 0 else None
+    return None
+
+
+def watch_spawn_parent(
+    argv: list[str],
+    probe: Callable[[int], Callable[[], bool] | None] | None = None,
+    start: Callable[..., Any] = start_parent_watchdog,
+) -> bool:
+    """Tout enfant multiprocessing (worker de capture, serveur Manager) se termine
+    quand son lanceur (la GUI) disparaît — handle WinDivert fermé, aucun orphelin.
+    À appeler avant freeze_support(). No-op hors enfant multiprocessing."""
+    global _worker_watch_started
+    pid = spawn_parent_pid(argv)
+    if pid is None or _worker_watch_started:
+        return False
+    alive = windows_parent_probe(pid=pid) if probe is None else probe(pid)
+    if alive is None:
+        return False
+    start(alive, lambda: None)
+    _worker_watch_started = True
+    return True

@@ -232,3 +232,23 @@ def test_open_windivert_arms_worker_watchdog():
     src = (ROOT / "guardian" / "network" / "sessions.py").read_text("utf-8")
     body = src[src.index("def open_windivert") : src.index("def probe_filter")]
     assert body.index("handle.open()") < body.index("watch_worker_parent()")
+
+
+def test_spawn_parent_watchdog_from_argv(monkeypatch):
+    from util import parentwatch
+
+    f = parentwatch.spawn_parent_pid
+    assert f(["g.exe"]) is None
+    assert f(["g.exe", "parent_pid=12"]) is None  # pas un enfant multiprocessing
+    argv = ["g.exe", "--multiprocessing-fork", "parent_pid=2596", "pipe_handle=8"]
+    assert f(argv) == 2596
+    assert f(["g.exe", "--multiprocessing-fork", "parent_pid=x"]) is None
+    monkeypatch.setattr(parentwatch, "_worker_watch_started", False)
+    started, seen = [], []
+    assert not parentwatch.watch_spawn_parent(["g.exe"], lambda p: None, started.append)
+    assert parentwatch.watch_spawn_parent(
+        argv, lambda p: seen.append(p) or (lambda: True), lambda *a: started.append(a)
+    )
+    assert seen == [2596] and len(started) == 1
+    src = (ROOT / "guardian" / "__main__.py").read_text("utf-8")
+    assert src.index("watch_spawn_parent(sys.argv)") < src.index("freeze_support()\n")
