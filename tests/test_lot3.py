@@ -944,3 +944,20 @@ def test_replay_flood_5000_cut(tmp_path):
     plain.write_bytes(gzip.decompress(FLOOD.read_bytes()))
     cut = _cut_times(plain)
     assert cut["198.51.100.50"] <= 1.0  # 5000 paquets/s pendant 8 s
+
+
+def test_saturated_storage_bounded_r1():
+    mon = SessionMonitor()
+    worst = 0
+    for i in range(60_000):
+        mon.add_packet(PLAYER, 10, i / 20_000)
+        worst = max(worst, len(mon.peers[PLAYER].rate_ts._ts))
+    assert len(mon.peers[PLAYER].rate_ts) == an.RATE_CAP
+    assert worst <= an.RATE_CAP + an.COMPACT_AT
+
+
+def test_storage_compacts_on_slow_long_session_r1():
+    mon = SessionMonitor()
+    for i in range(20_000):
+        mon.add_packet(PLAYER, 10, i / 50)  # 50 paquets/s pendant 400 s
+    assert len(mon.peers[PLAYER].rate_ts._ts) <= 250 + an.COMPACT_AT

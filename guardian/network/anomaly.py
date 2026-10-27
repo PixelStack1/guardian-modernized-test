@@ -90,6 +90,7 @@ SLICE_RATIO = 0.75
 FLOOD_FACTOR = 3
 MIN_SLICES = 3
 SATURATION_MIN_AGE = 1.0
+COMPACT_AT = 1024
 
 
 def _clamp(raw: object, default: float, lo: float, hi: float) -> float:
@@ -148,7 +149,8 @@ class TimeWindow:
         self._head = max(
             bisect_right(self._ts, older_than, self._head), len(self._ts) - cap
         )
-        if self._head > 1024 and self._head * 2 > len(self._ts):
+        # R1 : compactage dès 1024 éléments morts -> stockage <= cap + 1024.
+        if self._head >= COMPACT_AT:
             del self._ts[: self._head]
             self._head = 0
 
