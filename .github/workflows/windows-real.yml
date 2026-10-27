@@ -97,6 +97,8 @@ jobs:
         # SHA256 shown == artifact, startup-to-splash time. Kills only its own PIDs.
         if: always()
         timeout-minutes: 12
+        env:
+          GUARDIAN_CI_PROBE: "1"
         run: |
           $exe = Get-ChildItem dist/Guardian-*.exe | Select-Object -First 1
           poetry run python tests/windows/acceptance.py --exe $exe.FullName --out logs/acceptance 2>&1 | Tee-Object logs/acceptance.txt
