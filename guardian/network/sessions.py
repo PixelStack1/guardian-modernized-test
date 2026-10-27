@@ -86,6 +86,10 @@ PACKET_FILTER = (
 
 def packet_filter(extra_ports: bool = True) -> str:
     """Strict filter: UDP to exactly 6672 (+ inbound 61455-61458 if enabled), nothing else."""
+    from util.cimode import DRY_FILTER, dry
+
+    if dry():  # CI acceptance only (--ci-probe): match nothing, send nothing
+        return DRY_FILTER
     return PACKET_FILTER if extra_ports else PACKET_FILTER_6672_ONLY
 
 

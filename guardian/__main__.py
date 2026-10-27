@@ -2,11 +2,13 @@ import contextlib
 import ctypes
 import logging
 import sys
+import time
 from multiprocessing import freeze_support
 
 import pydivert
 
 from network.sessions import FilterOpenError, extra_ports_enabled, probe_filter
+from util import cimode
 from util.console import attach_console
 from util.crash import crash_report
 from util.driver import DriverLifecycle
@@ -43,6 +45,7 @@ if not debug_logger.handlers:
 
 
 CONSOLE_MODE = "--console" in sys.argv
+PYTHON_START = time.time()
 
 
 def gui_mode(argv: list[str]) -> bool:
@@ -75,6 +78,11 @@ def notify(text: str, console: bool | None = None) -> None:
 
 if __name__ == "__main__":
     freeze_support()
+    # Lot 8 : banc d'acceptation CI uniquement (inerte sans --ci-probe).
+    CI_PROBE = cimode.probe_path(sys.argv)
+    if CI_PROBE is not None:
+        cimode.enable_dry()
+        logger.warning("CI acceptance probe: dry filter, state -> %s", CI_PROBE)
     if CONSOLE_MODE:
         # Exécutable fenêtré (sans console) : en ouvrir une pour --console.
         attach_console()
@@ -130,7 +138,12 @@ if __name__ == "__main__":
         elif gui_mode(sys.argv):
             from gui.app import run_gui
 
-            run_gui(version=__version__, on_shutdown=driver.cleanup)
+            gui_probe = None
+            if CI_PROBE is not None:
+                from gui.ciprobe import CiProbe
+
+                gui_probe = CiProbe(CI_PROBE, {"python_start": PYTHON_START})
+            run_gui(version=__version__, on_shutdown=driver.cleanup, probe=gui_probe)
         else:
             close_splash()
             # Import tardif : menu.menu télécharge les plages Azure à l'import ;
