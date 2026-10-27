@@ -4,7 +4,8 @@ Rejoue un enregistrement de la vue en direct (CSV ``horodatage,ip,taille,sens``,
 format de network/recorder.py) dans la MÊME logique que la session en direct :
 classification serveur Rockstar / joueur, alerte nouveau joueur, détection
 d'anomalies, bouclier auto (optionnel) et décision de rejet par paquet
-(``should_drop``). N'ouvre AUCUN handle WinDivert, n'envoie ni ne fabrique aucun
+(``should_drop``), plus le lot 2 : verrou de session (``--verrou``) et
+récidivistes (``--recidiviste``, ``--sans-coupure``) via ``LivePolicy``. N'ouvre AUCUN handle WinDivert, n'envoie ni ne fabrique aucun
 paquet, ne fait aucun appel réseau : seules les décisions sont affichées.
 Par défaut rien n'est écrit sur le disque (journal : option ``--journal``).
 """
@@ -27,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from menu import livesession as ls  # noqa: E402
 from network.anomaly import SessionMonitor  # noqa: E402
 from network.newplayer import NewPlayerTracker, PlayerJournal  # noqa: E402
+from network.offenders import OffenderStore  # noqa: E402
 from network.recorder import HEADER  # noqa: E402
 from network.relay import (  # noqa: E402
     GAME_PORT,
@@ -89,6 +91,10 @@ class ReplayResult:
     new_players: list[str] = field(default_factory=list)
     servers: set[str] = field(default_factory=set)
     dropped_by_ip: Counter[str] = field(default_factory=Counter)
+    dropped_lock: Counter[str] = field(default_factory=Counter)
+    dropped_offender: Counter[str] = field(default_factory=Counter)
+    dropped_panic: Counter[str] = field(default_factory=Counter)
+    offender_alerts: list[str] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
 
 
@@ -98,8 +104,19 @@ def replay(
     auto_block: bool = False,
     journal: PlayerJournal | None = None,
     emit: Callable[[str], Any] = print,
+    lock_after: float | None = None,
+    offenders: Sequence[str] = (),
+    offender_drop: bool = True,
+    friends: dict[str, str] | None = None,
+    panic_after: float | None = None,
 ) -> ReplayResult:
-    """Rejoue ``rows`` ; ``emit`` reçoit chaque ligne de décision."""
+    """Rejoue ``rows`` ; ``emit`` reçoit chaque ligne de décision.
+
+    ``lock_after`` : le verrou de session s'active ``lock_after`` secondes après le
+    premier paquet (None = jamais). ``offenders`` : IP récidivistes connues au départ
+    (mémoire seule, aucun fichier lu ni écrit) ; les IP bloquées pendant le rejeu le
+    deviennent aussi. ``offender_drop`` : coupure immédiate. ``friends`` : ip -> pseudo
+    (toujours autorisés). ``panic_after`` : bouton panique activé après N secondes."""
     relay_block = is_block(relay_mode)
     now_box = [0.0]
 
@@ -115,7 +132,20 @@ def replay(
         # Plages Rockstar/Take-Two statiques uniquement (aucun appel réseau).
         auto_block_guard=ls.is_rockstar_server,
         relay_mode=relay_mode,
+        offenders=OffenderStore(persist=False, guard=ls.is_rockstar_server),
+        offender_drop=offender_drop,
+        sound=lambda: None,  # aucun son en rejeu
+        friends=dict(friends or {}),
     )
+    assert ctrl.offenders is not None
+    for ip in offenders:
+        if ctrl.offenders.record(ip, "replay", 0.0):
+            ctrl.offender_ips[ip] = 1.0
+    ctrl._offender_alerted.clear()
+    policy = ls.LivePolicy(
+        offenders=ctrl.offender_ips, offender_drop=offender_drop, friends=ctrl.friends
+    )
+    start: float | None = None
     monitor = SessionMonitor()
     tracker = NewPlayerTracker(
         ls.is_rockstar_server,
@@ -136,6 +166,17 @@ def replay(
     for ts, ip, size, inbound in rows:
         now_box[0] = ts
         res.packets += 1
+        if start is None:
+            start = ts
+        if lock_after is not None and not policy.lock_on and ts - start >= lock_after:
+            policy.lock_on = ctrl.session_lock = True
+            emit(f"[{ts:.3f}] " + t("replay.lock_on", n=len(policy.seen)))
+        if panic_after is not None and not policy.panic and ts - start >= panic_after:
+            policy.panic = ctrl.panic = True
+            emit(f"[{ts:.3f}] " + t("replay.panic_on"))
+        offender_line = ctrl.offender_check(ip, inbound)
+        if offender_line:
+            res.offender_alerts.append(ip)
         if ls.is_rockstar_server(ip):
             res.servers.add(ip)
         alert = tracker.observe(ts, ip, inbound)
@@ -164,6 +205,19 @@ def replay(
             # la vue en direct) mais pas le port : on suppose 6672 (le pire cas).
             is_relay_traffic(True, GAME_PORT, size),
         )
+        if not drop:
+            policy.offender_drop = ctrl.offender_drop
+            if policy.drop(inbound, ip):
+                drop = True
+                if policy.panic:
+                    bucket, key = res.dropped_panic, "replay.drop_panic"
+                elif ctrl.offender_drop and ip in ctrl.offender_ips:
+                    bucket, key = res.dropped_offender, "replay.drop_offender"
+                else:
+                    bucket, key = res.dropped_lock, "replay.drop_lock"
+                if bucket[ip] == 0:
+                    emit(f"[{ts:.3f}] " + t(key, ip=ip))
+                bucket[ip] += 1
         if drop:
             if res.dropped_by_ip[ip] == 0:
                 emit(
@@ -194,6 +248,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--bouclier", action="store_true", help="active le bouclier auto"
     )
+    parser.add_argument(
+        "--verrou",
+        type=float,
+        metavar="SECONDES",
+        help="active le verrou de session SECONDES après le premier paquet",
+    )
+    parser.add_argument(
+        "--recidiviste",
+        action="append",
+        default=[],
+        metavar="IP",
+        help="IP récidiviste connue au départ (répétable, mémoire seule)",
+    )
+    parser.add_argument(
+        "--sans-coupure",
+        action="store_true",
+        help="récidivistes : alerte seulement, pas de coupure immédiate",
+    )
+    parser.add_argument(
+        "--ami",
+        action="append",
+        default=[],
+        metavar="IP[=PSEUDO]",
+        help="ami toujours autorisé (répétable, mémoire seule)",
+    )
+    parser.add_argument(
+        "--panique",
+        type=float,
+        metavar="SECONDES",
+        help="active le bouton panique SECONDES après le premier paquet",
+    )
     parser.add_argument("--lang", choices=LANGUAGES, default="fr")
     parser.add_argument(
         "--journal", type=Path, help="dossier où écrire joueurs.log (sinon : rien)"
@@ -203,7 +288,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     journal = PlayerJournal(args.journal) if args.journal else None
     try:
         with args.csv.open(newline="", encoding="utf-8") as f:
-            replay(read_rows(f), normalize(args.relais), args.bouclier, journal)
+            replay(
+                read_rows(f),
+                normalize(args.relais),
+                args.bouclier,
+                journal,
+                lock_after=args.verrou,
+                offenders=args.recidiviste,
+                offender_drop=not args.sans_coupure,
+                friends=ls.load_friends(
+                    dict(
+                        (a.split("=", 1) + [""])[:2] if "=" in a else (a, a)
+                        for a in args.ami
+                    )
+                ),
+                panic_after=args.panique,
+            )
     except (OSError, ValueError) as e:
         print(f"erreur : {e}", file=sys.stderr)
         return 2

@@ -316,16 +316,100 @@ STRINGS: dict[str, dict[str, str]] = {
     "live.players_full": {"fr": "≥{max}", "en": "≥{max}"},
     "live.no_peers": {"fr": "(aucun pair connecté)", "en": "(no connected peer)"},
     "live.keys": {
-        "fr": "[B]loquer [P]seudo [D]ébloquer [A]uto [T]otal [L]Relais [E]nreg. "
-        "[↑↓/+-]Page [R]etour [Q]uitter",
-        "en": "[B]lock [P]Nickname [D]Unblock [A]uto [T]otal [L]Relay [E]Record "
-        "[↑↓/+-]Page [R]eturn [Q]uit",
+        "fr": "[B]loq [P]seudo [D]ébloq [A]uto [T]otal [V]errou [F]ami "
+        "[X]panique [E]nreg [↑↓+-] [R]etour [Q]uit",
+        "en": "[B]lock [P]Nick [D]Unblock [A]uto [T]otal [V]Lock [F]riend "
+        "[X]Panic [E]Rec [↑↓+-] [R]eturn [Q]uit",
     },
     "live.relay_status": {
         "fr": "Relais Rockstar : {state} (touche L ; « bloquer » jette seulement le jeu "
         "relayé UDP 6672, jamais auth/Social Club/matchmaking)",
         "en": 'Rockstar relay: {state} (key L; "block" drops only relayed UDP 6672 '
         "game traffic, never auth/Social Club/matchmaking)",
+    },
+    "live.lock_status": {
+        "fr": "Verrou de session : {state} (touche V ; jette toute IP pas encore vue "
+        "dans cette session, jamais les serveurs Rockstar)",
+        "en": "Session lock: {state} (key V; drops any IP not yet seen in this "
+        "session, never Rockstar servers)",
+    },
+    "live.panic_status": {
+        "fr": "Bouton panique : {state} (touche X ; jette tout joueur hors amis, "
+        "jamais les serveurs Rockstar) — amis : {n} (touche F)",
+        "en": "Panic button: {state} (key X; drops every player not a friend, "
+        "never Rockstar servers) — friends: {n} (key F)",
+    },
+    "live.panic_on": {"fr": "PANIQUE ACTIVE", "en": "PANIC ON"},
+    "live.ev.panic_toggled": {
+        "fr": "Bouton panique : {state}",
+        "en": "Panic button: {state}",
+    },
+    "live.ask_friend": {
+        "fr": "N° du joueur à ajouter/retirer des amis : ",
+        "en": "Row of the player to add/remove as friend: ",
+    },
+    "live.ask_friend_nick": {
+        "fr": "Pseudo de l'ami {ip} : ",
+        "en": "Friend nickname for {ip}: ",
+    },
+    "live.ev.friend_added": {
+        "fr": "Ami ajouté : {nick} ({ip})",
+        "en": "Friend added: {nick} ({ip})",
+    },
+    "live.ev.friend_removed": {
+        "fr": "Ami retiré : {nick} ({ip})",
+        "en": "Friend removed: {nick} ({ip})",
+    },
+    "live.ev.friends_full": {
+        "fr": "Liste d'amis pleine ({max})",
+        "en": "Friend list full ({max})",
+    },
+    "replay.panic_on": {"fr": "Bouton panique ACTIVÉ", "en": "Panic button ON"},
+    "replay.drop_panic": {
+        "fr": "REJET (panique) : {ip} serait jeté",
+        "en": "DROP (panic): {ip} would be dropped",
+    },
+    "live.offender_status": {
+        "fr": "Récidivistes connus : {n} — alerte sonore {sound} (S), "
+        "coupure immédiate {cut} (C)",
+        "en": "Known repeat offenders: {n} — sound alert {sound} (S), "
+        "immediate cut {cut} (C)",
+    },
+    "live.ev.lock_toggled": {
+        "fr": "Verrou de session : {state}",
+        "en": "Session lock: {state}",
+    },
+    "live.ev.sound_toggled": {
+        "fr": "Alerte sonore récidivistes : {state}",
+        "en": "Repeat offender sound alert: {state}",
+    },
+    "live.ev.cut_toggled": {
+        "fr": "Coupure immédiate des récidivistes : {state}",
+        "en": "Immediate cut of repeat offenders: {state}",
+    },
+    "live.ev.offender": {
+        "fr": "RÉCIDIVISTE de retour : {ip} (bloqué {count} fois, dernier {last}, "
+        "raison : {reason}) — {action}",
+        "en": "REPEAT OFFENDER is back: {ip} (blocked {count} times, last {last}, "
+        "reason: {reason}) — {action}",
+    },
+    "live.offender_cut": {
+        "fr": "coupé dès le 1er paquet",
+        "en": "cut from first packet",
+    },
+    "live.offender_alert": {"fr": "alerte seulement", "en": "alert only"},
+    "manual": {"fr": "blocage manuel", "en": "manual block"},
+    "replay.lock_on": {
+        "fr": "Verrou de session ACTIVÉ ({n} IP déjà vues)",
+        "en": "Session lock ON ({n} IPs already seen)",
+    },
+    "replay.drop_lock": {
+        "fr": "REJET (verrou) : {ip} serait jeté",
+        "en": "DROP (lock): {ip} would be dropped",
+    },
+    "replay.drop_offender": {
+        "fr": "REJET (récidiviste) : {ip} serait jeté",
+        "en": "DROP (repeat offender): {ip} would be dropped",
     },
     "live.relay_allow": {"fr": "autoriser", "en": "allow"},
     "live.relay_block": {"fr": "bloquer", "en": "block"},
