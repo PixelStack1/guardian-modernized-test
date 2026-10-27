@@ -19,6 +19,8 @@ class ConfigDataType(TypedDict):
     total_block: NotRequired[bool]
     # Langue de l'interface : « fr » (par défaut) ou « en ».
     language: NotRequired[str]
+    # Vue Session en direct : relais Rockstar « autoriser » (défaut si absent) ou « bloquer ».
+    rockstar_relay: NotRequired[str]
 
 
 class ConfigData(metaclass=Singleton):

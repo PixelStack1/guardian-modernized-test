@@ -316,10 +316,36 @@ STRINGS: dict[str, dict[str, str]] = {
     "live.players_full": {"fr": "≥{max}", "en": "≥{max}"},
     "live.no_peers": {"fr": "(aucun pair connecté)", "en": "(no connected peer)"},
     "live.keys": {
-        "fr": "[B]loquer [P]seudo [D]ébloquer [A]uto [T]otal [E]nreg. [↑↓/+-]Page "
-        "[R]etour [Q]uitter",
-        "en": "[B]lock [P]Nickname [D]Unblock [A]uto [T]otal [E]Record [↑↓/+-]Page "
-        "[R]eturn [Q]uit",
+        "fr": "[B]loquer [P]seudo [D]ébloquer [A]uto [T]otal [L]Relais [E]nreg. "
+        "[↑↓/+-]Page [R]etour [Q]uitter",
+        "en": "[B]lock [P]Nickname [D]Unblock [A]uto [T]otal [L]Relay [E]Record "
+        "[↑↓/+-]Page [R]eturn [Q]uit",
+    },
+    "live.relay_status": {
+        "fr": "Relais Rockstar : {state} (touche L ; « bloquer » jette le trafic des "
+        "serveurs Rockstar, risque de perte de session)",
+        "en": 'Rockstar relay: {state} (key L; "block" drops Rockstar server traffic, '
+        "you may lose the session)",
+    },
+    "live.relay_allow": {"fr": "autoriser", "en": "allow"},
+    "live.relay_block": {"fr": "bloquer", "en": "block"},
+    "live.ev.relay_toggled": {
+        "fr": "Relais Rockstar : {state}",
+        "en": "Rockstar relay: {state}",
+    },
+    "replay.drop": {
+        "fr": "REJET : {ip} ({dir}) serait jeté",
+        "en": "DROP: {ip} ({dir}) would be dropped",
+    },
+    "replay.summary": {
+        "fr": "Rejeu : {packets} paquets, {dropped} jetés, {players} nouveaux joueurs, "
+        "{servers} serveurs Rockstar",
+        "en": "Replay: {packets} packets, {dropped} dropped, {players} new players, "
+        "{servers} Rockstar servers",
+    },
+    "live.ev.new_player": {
+        "fr": "Nouveau joueur : {ip} ({country})",
+        "en": "New player: {ip} ({country})",
     },
     "live.bg_status": {
         "fr": "Protection active en fond (bouclier : {auto}, total : {total})",
