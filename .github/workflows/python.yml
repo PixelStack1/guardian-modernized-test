@@ -24,6 +24,8 @@ jobs:
         with:
           python-version: "3.13"
           cache: "poetry"
+                - name: Install Qt system libraries (PySide6 offscreen)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
       - name: Install dependencies
         run: poetry install --no-interaction --no-root
       - name: Check formatting (no auto-commit)
@@ -54,4 +56,6 @@ jobs:
       - name: Type-check with mypy
         run: poetry run mypy guardian
       - name: Test with pytest
+              env:
+          QT_QPA_PLATFORM: offscreen
         run: poetry run python -m pytest
