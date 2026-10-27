@@ -41,8 +41,8 @@ est vérifié : son PPID doit être le bootloader lancé par le banc).
 Seuils provisoires, choisis avant toute mesure sur runner (le banc n'a pas
 encore tourné sur Windows), surchargeables par `GUARDIAN_ACC_<NOM>` :
 `SPLASH_MS=5000` (l'écran du bootloader s'affiche avant l'extraction complète,
-attendu < 1 s), `MAIN_READY_MS=90000` (informatif, inclut le téléchargement des
-plages Azure), `DRIVER_GONE_MS=5000`, `EXIT_MS=15000`, `HOTKEY_MS=3000`,
+attendu < 1 s), `MAIN_READY_MS=70000` (mesuré 20,7-60,2 s sur runner ; inclut le téléchargement
+des plages Azure), `DRIVER_GONE_MS=5000`, `EXIT_MS=15000`, `HOTKEY_MS=3000`,
 `LOGOFF_STATUS_MS=10000` (le statut apparaît 3 s après le nettoyage). Les
 mesures sont dans `metrics` de `acceptance.json` : resserrer après quelques runs.
 
@@ -50,9 +50,12 @@ mesures sont dans `metrics` de `acceptance.json` : resserrer après quelques run
 
 - Vraie déconnexion / arrêt de Windows : simulés par messages à la fenêtre.
 - Gestionnaire des tâches réel : simulé par `taskkill /F` (même TerminateProcess).
-- Claviers physiques AZERTY : `SendInput` injecte des codes virtuels ; la
-  disposition du runner (US) ne produit pas les caractères AltGr, seul le
-  non-déclenchement des raccourcis est vérifié.
+- Claviers physiques AZERTY : non disponibles. Le banc charge la disposition
+  fr-FR (`LoadKeyboardLayoutW("0000040C", KLF_ACTIVATE)`), la demande à la SEULE
+  fenêtre de Guardian (`WM_INPUTLANGCHANGEREQUEST`) et vérifie
+  `GetKeyboardLayout` du fil GUI == 0x040C avant d'injecter AltGr (LCtrl+RAlt)
+  + E (€), 0 (@), X, A, T, V : aucun raccourci ne doit partir. Disposition active
+  et caractères attendus (ToUnicodeEx) affichés ; bascule non vérifiée => SKIP.
 - `SendInput` exige un bureau interactif ; s'il n'est pas livré, 3c/3d sont SKIP.
 - Trafic GTA réel et blocage effectif : hors banc (filtre à blanc par conception).
 - UAC (le runner est déjà administrateur) et SmartScreen.
@@ -98,3 +101,13 @@ WinDivertShutdown) avant la fermeture, ou recv avec timeout.
   KNOWN RESERVE**, avec le temps mesuré (non bloquant). Tous les contrôles
   « WinDivert gone » restent stricts (FAIL bloquant). Le harnais n'attend pas
   l'armement avant le kill : le cas du kill précoce reste testé.
+
+### Relance après kill brutal et jalons de démarrage
+
+- Après `taskkill /F` du PID GUI (orphelin de capture laissé vivant), le banc
+  relance immédiatement Guardian : fenêtre prête, pilote chargé (service
+  RUNNING), 5 raccourcis enregistrés, puis WM_CLOSE et pilote absent <= 5 s.
+  Contrôles BLOQUANTS.
+- La sonde note les jalons `process_start`, `python_start`, `imports_done`,
+  `driver_loaded`, `startup_window`, `qt_app_created`, `menu_imported`,
+  `window_shown`, `main_ready` ; le banc les affiche en ms depuis le lancement.

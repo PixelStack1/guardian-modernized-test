@@ -55,3 +55,38 @@ def enable_dry() -> None:
 
 def dry() -> bool:
     return os.environ.get(DRY_ENV) == "1"
+
+
+# Jalons de démarrage (horodatages, aucune donnée réseau) : relevés toujours (coût
+# négligeable), mais seule la sonde CI les écrit. Inerte en usage normal.
+MARKS: dict[str, float] = {}
+
+
+def mark(name: str) -> None:
+    import time
+
+    MARKS.setdefault(name, time.time())
+
+
+def process_start_time() -> float | None:
+    """Création de CE processus (GetProcessTimes), en secondes epoch ; None sinon."""
+    try:
+        import ctypes
+        from ctypes import wintypes as wt
+
+        k32 = ctypes.WinDLL("kernel32")
+        k32.GetCurrentProcess.restype = wt.HANDLE
+        k32.GetProcessTimes.argtypes = [wt.HANDLE] + [ctypes.POINTER(wt.FILETIME)] * 4
+        c, e, k, u = (wt.FILETIME() for _ in range(4))
+        if not k32.GetProcessTimes(
+            k32.GetCurrentProcess(),
+            ctypes.byref(c),
+            ctypes.byref(e),
+            ctypes.byref(k),
+            ctypes.byref(u),
+        ):
+            return None
+        ft = (c.dwHighDateTime << 32) | c.dwLowDateTime
+        return ft / 1e7 - 11644473600.0
+    except Exception:
+        return None

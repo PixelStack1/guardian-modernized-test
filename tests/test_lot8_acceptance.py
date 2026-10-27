@@ -453,3 +453,35 @@ def test_sentinel_armed_before_driver_load_and_manager_cleans():
     assert src.index("start_driver_sentinel()") < src.index("driver.start()")
     pw = (ROOT / "guardian" / "util" / "parentwatch.py").read_text("utf-8")
     assert 'arm_with_pid(gui_pid, "Manager server", on_exit=orphan_cleanup)' in pw
+
+
+def test_bench_stages_layout_and_ready_threshold():
+    b = load_bench()
+    assert b.THRESHOLDS["MAIN_READY_MS"] == 70000
+    marks = {"process_start": 10.0, "main_ready": 12.5, "window_shown": 12.25, "x": 1}
+    assert b.stage_ms(marks, 10.0) == {
+        "process_start": 0,
+        "window_shown": 2250,
+        "main_ready": 2500,
+    }
+    assert b.layout_lang(0xF020040C) == 0x040C
+    assert b.layout_lang(0x04090409) == 0x0409
+    assert set("XATV") <= set(b.AZERTY_ALTGR_KEYS) and {"E", "0"} <= set(
+        b.AZERTY_ALTGR_KEYS
+    )
+    assert b.altgr_sequence("0")[2] == (0x30, True)
+
+
+def test_startup_marks_recorded_and_inert(monkeypatch):
+    monkeypatch.setattr(cimode, "MARKS", {})
+    cimode.mark("imports_done")
+    first = cimode.MARKS["imports_done"]
+    cimode.mark("imports_done")
+    assert {"imports_done": first} == cimode.MARKS
+    src = (ROOT / "guardian" / "gui" / "app.py").read_text("utf-8")
+    for m in ("qt_app_created", "menu_imported", "window_shown"):
+        assert f'probe.mark("{m}")' in src
+    main = (ROOT / "guardian" / "__main__.py").read_text("utf-8")
+    assert (
+        'cimode.mark("driver_loaded")' in main and 'cimode.mark("imports_done")' in main
+    )

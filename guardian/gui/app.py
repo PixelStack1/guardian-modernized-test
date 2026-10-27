@@ -87,6 +87,8 @@ def run_gui(
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
+    if probe is not None:
+        probe.mark("qt_app_created")
     splash = startup_window(version)
     close_pyi_splash()
     if probe is not None:  # lot 8 : banc CI uniquement (--ci-probe)
@@ -94,6 +96,9 @@ def run_gui(
 
     from gui.window import MainWindow
     from menu import livesession as ls
+
+    if probe is not None:
+        probe.mark("menu_imported")
 
     # Lot 7 : arrêt propre aussi à la fin de session Windows (aboutToQuit).
     app.aboutToQuit.connect(ls.stop_background)
@@ -111,6 +116,7 @@ def run_gui(
         win.show()
         splash.close()
         if probe is not None:
+            probe.mark("window_shown")
             probe.attach(win)
         return int(app.exec())
     finally:

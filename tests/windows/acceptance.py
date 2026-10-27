@@ -31,7 +31,7 @@ from typing import Any
 # Seuils (ms), surchargeables par variables d'environnement GUARDIAN_ACC_<NOM>.
 THRESHOLDS: dict[str, int] = {
     "SPLASH_MS": 5000,  # lancement -> écran de démarrage du bootloader visible
-    "MAIN_READY_MS": 90000,  # lancement -> fenêtre principale prête (sonde)
+    "MAIN_READY_MS": 70000,  # lancement -> fenêtre principale prête (mesuré 20,7-60,2 s)
     "DRIVER_GONE_MS": 5000,  # fin du processus / nettoyage -> pilote absent
     "EXIT_MS": 15000,  # WM_CLOSE -> fin du processus
     "HOTKEY_MS": 3000,  # WM_HOTKEY / SendInput -> action vue par la sonde
@@ -46,6 +46,38 @@ ENDSESSION_LOGOFF = 0x80000000
 MOD_ALT, MOD_CONTROL, MOD_SHIFT = 0x0001, 0x0002, 0x0004
 VK_F12, VK_LCONTROL, VK_RMENU, VK_MENU, VK_CONTROL = 0x7B, 0xA2, 0xA5, 0x12, 0x11
 STOPPED_TEXT = "Protection arrêtée"
+WM_INPUTLANGCHANGEREQUEST = 0x0050
+KLF_ACTIVATE = 0x00000001
+AZERTY_KLID = "0000040C"  # Français (France)
+LANG_FR_FR = 0x040C
+# AltGr + touche produisant un caractère en AZERTY (€, @), puis les lettres des raccourcis.
+AZERTY_ALTGR_KEYS = "E0XATV"
+STAGES = (
+    "process_start",
+    "python_start",
+    "imports_done",
+    "driver_loaded",
+    "startup_window",
+    "qt_app_created",
+    "menu_imported",
+    "window_shown",
+    "main_ready",
+)
+
+
+def stage_ms(marks: Mapping[str, Any], t0: float) -> dict[str, int]:
+    """Jalons de démarrage de la sonde, en ms depuis le lancement par le banc."""
+    out: dict[str, int] = {}
+    for name in STAGES:
+        v = marks.get(name)
+        if isinstance(v, (int, float)):
+            out[name] = round((float(v) - t0) * 1000)
+    return out
+
+
+def layout_lang(hkl: int) -> int:
+    """Identifiant de langue (mot bas) d'un HKL."""
+    return int(hkl) & 0xFFFF
 
 
 def threshold(name: str, env: Mapping[str, str] | None = None) -> int:
@@ -248,6 +280,50 @@ class Win:  # pragma: no cover - Windows
         time.sleep(0.3)
         return int(u.GetForegroundWindow()) == hwnd
 
+    def window_layout(self, hwnd: int, pid: int) -> int:
+        """HKL actif du fil GUI de Guardian (fil propriétaire de SA fenêtre)."""
+        self._own(hwnd, pid)
+        self.u32.GetKeyboardLayout.restype = self.ct.c_void_p
+        self.u32.GetKeyboardLayout.argtypes = [self.wt.DWORD]
+        tid = int(self.u32.GetWindowThreadProcessId(hwnd, None))
+        return int(self.u32.GetKeyboardLayout(tid) or 0)
+
+    def load_layout(self, klid: str) -> int:
+        self.u32.LoadKeyboardLayoutW.restype = self.ct.c_void_p
+        self.u32.LoadKeyboardLayoutW.argtypes = [self.wt.LPCWSTR, self.wt.UINT]
+        return int(self.u32.LoadKeyboardLayoutW(klid, KLF_ACTIVATE) or 0)
+
+    def switch_layout(self, hwnd: int, pid: int, hkl: int) -> bool:
+        """WM_INPUTLANGCHANGEREQUEST vers la SEULE fenêtre de Guardian."""
+        self.u32.PostMessageW.argtypes = [
+            self.wt.HWND,
+            self.wt.UINT,
+            self.wt.WPARAM,
+            self.wt.LPARAM,
+        ]
+        return self.post(hwnd, pid, WM_INPUTLANGCHANGEREQUEST, 0, hkl)
+
+    def altgr_char(self, vk: int, hkl: int) -> str:
+        """Caractère que la disposition ``hkl`` produit pour AltGr+vk (ToUnicodeEx)."""
+        ct, wt = self.ct, self.wt
+        self.u32.ToUnicodeEx.argtypes = [
+            wt.UINT,
+            wt.UINT,
+            ct.POINTER(ct.c_ubyte),
+            wt.LPWSTR,
+            ct.c_int,
+            wt.UINT,
+            ct.c_void_p,
+        ]
+        self.u32.MapVirtualKeyExW.argtypes = [wt.UINT, wt.UINT, ct.c_void_p]
+        state = (ct.c_ubyte * 256)()
+        for k in (VK_CONTROL, VK_MENU, VK_LCONTROL, VK_RMENU):
+            state[k] = 0x80
+        buf = ct.create_unicode_buffer(8)
+        scan = int(self.u32.MapVirtualKeyExW(vk, 0, hkl))
+        n = int(self.u32.ToUnicodeEx(vk, scan, state, buf, 8, 4, hkl))
+        return buf.value[:n] if n > 0 else ""
+
     def send_keys(self, seq: list[tuple[int, bool]], pid: int) -> int:
         # SendInput va à la fenêtre au premier plan : on n'injecte que si c'est Guardian.
         fg = int(self.u32.GetForegroundWindow())
@@ -332,6 +408,11 @@ class Run:  # pragma: no cover - Windows
             if self.hwnd not in mine:
                 self.hwnd = mine[0] if mine else 0
             ok = ok and self.hwnd != 0
+        stages = stage_ms(s.get("marks", {}), self.t0)
+        self.rep.metrics[f"{self.name}.stages_ms"] = stages
+        print(
+            f"[INFO] {self.name} startup stages (ms since launch): {stages}", flush=True
+        )
         self.rep.metrics[f"{self.name}.main_ready_ms"] = round(
             (s.get("marks", {}).get("main_ready", self.t0) - self.t0) * 1000
         )
@@ -482,6 +563,7 @@ def scenario_main(
             len(fired()) == n0 and st() == s0 if sent else None,
             f"injected={sent} foreground={fg}",
         )
+        azerty_altgr(rep, win, run, fired, st)
         n1 = len(fired())
         sent = win.send_keys(ctrl_alt_f12_sequence(), run.child)
         got, ms = wait_until(lambda: len(fired()) > n1, threshold("HOTKEY_MS"))
@@ -508,6 +590,52 @@ def scenario_main(
         check_driver_gone(rep, "WM_CLOSE")
     finally:
         run.kill_own()
+
+
+def azerty_altgr(
+    rep: Report,
+    win: Win,
+    run: Run,
+    fired: Callable[[], list[str]],
+    st: Callable[[], dict[str, Any]],
+) -> None:  # pragma: no cover - Windows
+    """AltGr réel sous AZERTY (fr-FR) : aucun raccourci ne doit se déclencher."""
+    name = "AltGr AZERTY (fr-FR, real SendInput): no hotkey fired"
+    before = win.window_layout(run.hwnd, run.child)
+    hkl = win.load_layout(AZERTY_KLID)
+    posted = bool(hkl) and win.switch_layout(run.hwnd, run.child, hkl)
+    ok, _ = wait_until(
+        lambda: layout_lang(win.window_layout(run.hwnd, run.child)) == LANG_FR_FR,
+        3000,
+        0.1,
+    )
+    active = win.window_layout(run.hwnd, run.child)
+    layout = (
+        f"layout=0x{layout_lang(active):04X} (hkl=0x{active:X}, before=0x{before:X})"
+    )
+    rep.metrics["azerty_active_layout"] = f"0x{layout_lang(active):04X}"
+    print(f"[INFO] Guardian GUI thread keyboard layout: {layout}", flush=True)
+    if not ok:
+        rep.check(
+            name,
+            None,
+            f"layout switch not verified: loaded={hkl:#x} posted={posted}; {layout}",
+        )
+        return
+    chars = {k: win.altgr_char(ord(k), hkl) for k in AZERTY_ALTGR_KEYS}
+    fg = win.foreground(run.hwnd, run.child)
+    n0, s0 = len(fired()), dict(st())
+    sent = sum(win.send_keys(altgr_sequence(k), run.child) for k in AZERTY_ALTGR_KEYS)
+    time.sleep(1.5)
+    rep.metrics["azerty_altgr_injected"] = sent
+    produced = " ".join(f"AltGr+{k}=>{c or '-'}" for k, c in chars.items())
+    detail = f"{layout}; injected={sent} foreground={fg}; {produced}"
+    if not sent:
+        rep.check(
+            name, None, "input not delivered (foreground not Guardian); " + detail
+        )
+        return
+    rep.check(name, len(fired()) == n0 and st() == s0, detail)
 
 
 def spawn_log_path() -> Path:
@@ -559,6 +687,42 @@ def scenario_kill(
         else:
             rep.check(name, ok, detail)
         check_driver_gone(rep, f"taskkill-{target}")
+        if target == "child":
+            # Relance immédiate, orphelin de capture éventuellement encore vivant.
+            relaunch_after_kill(exe, out, rep, win)
+    finally:
+        run.kill_own()
+
+
+def relaunch_after_kill(
+    exe: Path, out: Path, rep: Report, win: Win
+) -> None:  # pragma: no cover - Windows
+    """Bloquant : Guardian redémarre normalement malgré l'orphelin."""
+    left = same_exe_processes(exe)
+    run = Run(exe, out, "relaunch", rep, win)
+    try:
+        if not run.wait_ready():
+            return
+        sc = sc_query()
+        rep.check(
+            "relaunch: driver loaded (service RUNNING)",
+            "RUNNING" in sc,
+            " ".join(sc.split())[:160] + f"; before relaunch: {left}",
+        )
+        hk = run.state().get("hotkeys", {})
+        rep.check(
+            "relaunch: RegisterHotKey succeeded for all 5",
+            sorted(hk.get("registered", []))
+            == sorted(run.state().get("hotkey_ids", {}))
+            and len(hk.get("registered", [])) == 5
+            and not hk.get("failed"),
+            json.dumps(hk),
+        )
+        win.post(run.hwnd, run.child, WM_CLOSE)
+        ok, ms = wait_until(run.gone, threshold("EXIT_MS"), 0.1)
+        rep.metrics["relaunch_wm_close_exit_ms"] = round(ms)
+        rep.check("relaunch: WM_CLOSE process tree exited", ok, f"{ms:.0f} ms")
+        check_driver_gone(rep, "relaunch")
     finally:
         run.kill_own()
 
@@ -645,6 +809,10 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - Windows
         "utf-8",
     )
     print(json.dumps(rep.metrics, indent=1))
+    print("Startup stages (ms since launch):")
+    for key, val in rep.metrics.items():
+        if key.endswith(".stages_ms"):
+            print(f"  {key[: -len('.stages_ms')]}: {val}")
     print("FAILED:" if rep.failed else "ALL PASS", ", ".join(rep.failed))
     if rep.warned:
         print("KNOWN RESERVE (non-blocking):", ", ".join(rep.warned))

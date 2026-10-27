@@ -46,6 +46,7 @@ if not debug_logger.handlers:
 
 CONSOLE_MODE = "--console" in sys.argv
 PYTHON_START = time.time()
+cimode.mark("imports_done")
 
 
 def gui_mode(argv: list[str]) -> bool:
@@ -120,6 +121,7 @@ if __name__ == "__main__":
 
         sentinel_owned = _pwatch.start_driver_sentinel()
         driver.start()
+        cimode.mark("driver_loaded")
         mark_owned(driver.loaded_by_guardian)  # hérité par les workers / Manager
         if sentinel_owned is not None and driver.loaded_by_guardian:
             sentinel_owned.value = 1
@@ -160,7 +162,11 @@ if __name__ == "__main__":
             if CI_PROBE is not None:
                 from gui.ciprobe import CiProbe
 
-                gui_probe = CiProbe(CI_PROBE, {"python_start": PYTHON_START})
+                marks = {"python_start": PYTHON_START, **cimode.MARKS}
+                started = cimode.process_start_time()
+                if started is not None:
+                    marks["process_start"] = started
+                gui_probe = CiProbe(CI_PROBE, marks)
             run_gui(version=__version__, on_shutdown=driver.cleanup, probe=gui_probe)
         else:
             close_splash()
