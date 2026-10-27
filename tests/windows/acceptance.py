@@ -228,6 +228,11 @@ class Win:  # pragma: no cover - Windows
         self.u32.EnumWindows(proto(cb), 0)
         return found
 
+    def title(self, hwnd: int) -> str:
+        buf = self.ct.create_unicode_buffer(256)
+        self.u32.GetWindowTextW(hwnd, buf, 256)
+        return str(buf.value)
+
     def owner_pid(self, hwnd: int) -> int:
         owner = self.wt.DWORD()
         self.u32.GetWindowThreadProcessId(hwnd, self.ct.byref(owner))
@@ -746,6 +751,20 @@ def relaunch_after_kill(
     run = Run(exe, out, "relaunch", rep, win)
     try:
         if not run.wait_ready():
+            # Diagnostic en lecture seule : où la relance est-elle bloquée ?
+            pids = [
+                int(x.split("<-")[0])
+                for x in same_exe_processes(exe).split()
+                if "<-" in x
+            ]
+            titles = {p: [win.title(h) for h in win.windows_of(p)] for p in pids}
+            sc = " ".join(sc_query().split())[:200]
+            print(
+                f"[INFO] relaunch diag: probe={run.state()}; sc={sc}; "
+                f"processes={same_exe_processes(exe, cmdline=True)}; windows={titles}; "
+                f"ci-spawn.log: {' | '.join(spawn_log()[-12:])}",
+                flush=True,
+            )
             return
         sc = sc_query()
         rep.check(
