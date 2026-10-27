@@ -41,7 +41,7 @@ from network.relay import (
     normalize,
     toggled,
 )
-from util import jobobject, parentwatch
+from util import parentwatch
 from util.geoip import country_code
 from util.i18n import t
 from util.sound import beep
@@ -1642,7 +1642,6 @@ class BackgroundSession:
             return
         self.started = True
         self.proc.start()
-        jobobject.log_spawn("live capture", getattr(self.proc, "pid", "?"))
         self._thread.start()
 
     def alive(self) -> bool:
