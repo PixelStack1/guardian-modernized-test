@@ -26,6 +26,8 @@ def is_onefile_child() -> bool:
     meipass = getattr(sys, "_MEIPASS", None)
     if not getattr(sys, "frozen", False) or not meipass:
         return False
+    if not os.path.basename(os.path.normpath(meipass)).startswith("_MEI"):
+        return False  # onedir (_internal) : pas de bootloader parent
     exe_dir = os.path.normcase(os.path.abspath(os.path.dirname(sys.executable)))
     return bool(exe_dir != os.path.normcase(os.path.abspath(meipass)))
 
