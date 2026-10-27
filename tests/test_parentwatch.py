@@ -1,0 +1,76 @@
+import sys
+import threading
+from pathlib import Path
+
+from util import parentwatch
+
+
+def test_watchdog_cleans_up_then_exits_when_parent_dies():
+    state = {"alive": True}
+    calls: list[str] = []
+    done = threading.Event()
+
+    def exit_fn(code):
+        calls.append(f"exit{code}")
+        done.set()
+
+    parentwatch.start_parent_watchdog(
+        lambda: state["alive"], lambda: calls.append("cleanup"), exit_fn, interval=0.01
+    )
+    assert not done.wait(0.1)
+    state["alive"] = False
+    assert done.wait(2)
+    assert calls == ["cleanup", "exit0"]
+
+
+def test_watchdog_exits_even_if_cleanup_raises():
+    done = threading.Event()
+
+    def boom():
+        raise RuntimeError("x")
+
+    t = parentwatch.start_parent_watchdog(
+        lambda: False, boom, lambda c: done.set(), 0.01
+    )
+    assert done.wait(2)
+    t.join(2)
+
+
+def test_probe_uses_handle_and_fails_open():
+    class K:
+        def __init__(self, result):
+            self.result = result
+
+        def OpenProcess(self, access, inherit, pid):
+            assert access == parentwatch.SYNCHRONIZE
+            return 42
+
+        def WaitForSingleObject(self, h, ms):
+            if self.result is None:
+                raise OSError
+            return self.result
+
+    assert parentwatch.windows_parent_probe(K(parentwatch.WAIT_TIMEOUT))() is True
+    assert parentwatch.windows_parent_probe(K(0))() is False
+    assert parentwatch.windows_parent_probe(K(None))() is True
+
+
+def test_onefile_detection(monkeypatch, tmp_path):
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    assert not parentwatch.is_onefile_child()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "_MEI1"), raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "Guardian.exe"))
+    assert parentwatch.is_onefile_child()
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "app"), raising=False)
+    assert not parentwatch.is_onefile_child()
+
+
+def test_main_arms_watchdog_after_driver_start_before_self_test():
+    src = (Path(__file__).resolve().parents[1] / "guardian" / "__main__.py").read_text(
+        "utf-8"
+    )
+    i_start = src.index("driver.start()")
+    i_watch = src.index("start_parent_watchdog(probe, driver.cleanup)")
+    i_self = src.index('"--self-test-exit" in sys.argv:')
+    assert i_start < i_watch < i_self

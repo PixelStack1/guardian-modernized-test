@@ -103,6 +103,13 @@ if __name__ == "__main__":
 
         driver.add_pre_cleanup(stop_background)
         driver.install_console_handler()
+        # Onefile: si le bootloader parent est tué seul, l'enfant libère le pilote et sort.
+        from util import parentwatch
+
+        if parentwatch.is_onefile_child():
+            probe = parentwatch.windows_parent_probe()
+            if probe is not None:
+                parentwatch.start_parent_watchdog(probe, driver.cleanup)
         try:
             probe_filter(extra_ports_enabled())
         except FilterOpenError as e:
